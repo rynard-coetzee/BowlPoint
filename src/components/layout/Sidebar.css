@@ -1,0 +1,87 @@
+.sidebar {
+    width: 280px;
+    min-height: 100vh;
+
+    background-color: #1f3b2d;
+    color: white;
+
+    padding: 20px;
+
+    text-align: left;
+}
+
+/* ==========================================
+   BowlPoint Branding
+========================================== */
+
+.sidebar-brand {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+
+    padding: 20px 10px 35px;
+}
+
+.sidebar-logo {
+    width: 180px;
+    height: auto;
+
+    object-fit: contain;
+}
+
+/* ==========================================
+   Navigation
+========================================== */
+
+.sidebar ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.sidebar li {
+    margin-bottom: 8px;
+}
+
+.sidebar a {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+
+    padding: 14px 18px;
+
+    color: rgba(255, 255, 255, 0.9);
+    text-decoration: none;
+
+    border-radius: 10px;
+
+    transition: all 0.2s ease;
+}
+
+.sidebar a:visited {
+    color: white;
+}
+
+.sidebar a:hover {
+    background: rgba(255, 255, 255, 0.10);
+    transform: translateX(4px);
+}
+
+.sidebar a.active-link {
+    background: rgba(255, 255, 255, 0.18);
+    color: white;
+    font-weight: 600;
+}
+
+.sidebar a i {
+    width: 24px;
+    text-align: center;
+    font-size: 1.2rem;
+    color: rgba(255, 255, 255, 0.85);
+
+    transition: color 0.2s ease;
+}
+
+.sidebar a.active-link i {
+    color: #ffc107;
+}
