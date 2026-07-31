@@ -1,6 +1,9 @@
-import MatchCard from "./MatchCard";
+import RoundCard from "./RoundCard";
 
-function FixturesCard({ tournament, updateMatchScore }) {
+function FixturesCard({
+    tournament,
+    updateMatchScore
+}) {
 
     if (tournament.status === "setup") {
         return null;
@@ -20,54 +23,26 @@ function FixturesCard({ tournament, updateMatchScore }) {
 
             <div className="card-body">
 
-                {tournament.rounds.map((round) => (
+                <div className="row g-4">
 
-                    <div
-                        key={round.id}
-                        className="mb-5"
-                    >
+                    {tournament.rounds.map((round) => (
 
-                        <h5 className="fw-bold mb-3">
-                            Round {round.number}
-                        </h5>
+                        <div
+                            key={round.id}
+                            className="col-12 col-xl-6"
+                        >
 
-                        <div className="row g-3">
-
-                            {round.matches.map((match) => (
-
-                                <div
-                                    key={match.id}
-                                    className="col-lg-6"
-                                >
-
-                                    <MatchCard
-                                        roundId={round.id}
-                                        match={match}
-                                        skinsEnabled={
-                                            tournament.scoring.skins.enabled
-                                        }
-                                        onSaveScore={updateMatchScore}
-                                    />
-
-                                </div>
-
-                            ))}
+                            <RoundCard
+                                round={round}
+                                skinsEnabled={tournament.scoring.skins.enabled}
+                                updateMatchScore={updateMatchScore}
+                            />
 
                         </div>
 
-                        {round.byeTeam && (
+                    ))}
 
-                            <div className="alert alert-warning mt-3 mb-0">
-
-                                <strong>BYE:</strong> {round.byeTeam.name}
-
-                            </div>
-
-                        )}
-
-                    </div>
-
-                ))}
+                </div>
 
             </div>
 
