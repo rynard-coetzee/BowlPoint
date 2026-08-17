@@ -35,7 +35,7 @@ function TournamentSetup({
 
                 {/* Left Column */}
 
-               <div className="col-lg-5">
+               <div className="col-lg-6 order-2 order-lg-1">
 
                     <SectionPanel>
 
@@ -87,7 +87,7 @@ function TournamentSetup({
                 </div>
                 {/* Right Column */}
 
-                <div className="col-lg-7">
+                <div className="col-lg-6 order-1 order-lg-2">
 
                     <SectionPanel>
 
