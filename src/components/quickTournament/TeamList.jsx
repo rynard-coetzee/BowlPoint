@@ -1,7 +1,12 @@
 import { useRef, useState } from "react";
 import TeamRow from "./TeamRow";
+import SpeechInput from "../common/SpeechInput";
 
 function TeamList({ teams, onAddTeam, onRemoveTeam }) {
+
+    const [teamName, setTeamName] = useState("");
+
+    const inputRef = useRef(null);
 
     const handlePaste = (e) => {
 
@@ -12,29 +17,25 @@ function TeamList({ teams, onAddTeam, onRemoveTeam }) {
         }
 
         // Split on new lines, commas or semicolons
-        const teams = text
+        const pastedTeams = text
             .split(/\r?\n|,|;/)
             .map(name => name.trim())
             .filter(Boolean);
 
         // Only treat it as a bulk import if more than one team was pasted
-        if (teams.length <= 1) {
+        if (pastedTeams.length <= 1) {
             return;
         }
 
         e.preventDefault();
 
-        teams.forEach(team => onAddTeam(team));
+        pastedTeams.forEach(team => onAddTeam(team));
 
         setTeamName("");
 
         inputRef.current?.focus();
 
     };
-
-    const [teamName, setTeamName] = useState("");
-
-    const inputRef = useRef(null);
 
     const handleAdd = () => {
 
@@ -57,6 +58,7 @@ function TeamList({ teams, onAddTeam, onRemoveTeam }) {
         if (e.key === "Enter") {
 
             e.preventDefault();
+
             handleAdd();
 
         }
@@ -75,26 +77,34 @@ function TeamList({ teams, onAddTeam, onRemoveTeam }) {
 
                 </label>
 
-                <div className="input-group">
+                <SpeechInput
+                    ref={inputRef}
+                    placeholder="Type, speak, or paste a team name..."
+                    value={teamName}
+                    onChange={(e) => setTeamName(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    onPaste={handlePaste}
+                />
 
-                    <input
-                        ref={inputRef}
-                        className="form-control"
-                        placeholder="Type a team name or paste a list..."
-                        value={teamName}
-                        onChange={(e) => setTeamName(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        onPaste={handlePaste}
-                    />
+                <div className="form-text">
+
+                    <i className="bi bi-mic me-1"></i>
+
+                    Tap the microphone to speak the team name.
+
+                </div>
+
+                <div className="d-grid mt-3">
 
                     <button
+                        type="button"
                         className="btn btn-primary"
                         onClick={handleAdd}
                     >
 
                         <i className="bi bi-plus-lg me-2"></i>
 
-                        Add
+                        Add Team
 
                     </button>
 
