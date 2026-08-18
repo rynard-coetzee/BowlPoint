@@ -3,7 +3,10 @@ import MatchCard from "./MatchCard";
 function RoundCard({
     round,
     skinsEnabled,
-    updateMatchScore
+    updateMatchScore,
+    drawEditMode,
+    selectedTeams,
+    onSelectTeamForSwap
 }) {
 
     return (
@@ -34,6 +37,11 @@ function RoundCard({
                                 match={match}
                                 skinsEnabled={skinsEnabled}
                                 onSaveScore={updateMatchScore}
+                                drawEditMode={drawEditMode}
+                                selectedTeams={selectedTeams}
+                                onSelectTeamForSwap={
+                                    onSelectTeamForSwap
+                                }
                             />
 
                         </div>

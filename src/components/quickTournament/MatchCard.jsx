@@ -4,8 +4,20 @@ function MatchCard({
     roundId,
     match,
     skinsEnabled,
-    onSaveScore
+    onSaveScore,
+    drawEditMode,
+    selectedTeams,
+    onSelectTeamForSwap
 }) {
+    const teamASelected =
+        selectedTeams?.some(
+            selection => selection.teamId === match.teamA.id
+        );
+
+    const teamBSelected =
+        selectedTeams?.some(
+            selection => selection.teamId === match.teamB.id
+        );
 
     const [scoreA, setScoreA] = useState(match.scoreA ?? "");
     const [scoreB, setScoreB] = useState(match.scoreB ?? "");
@@ -76,11 +88,31 @@ function MatchCard({
 
             <div className="card-body">
 
-                <h5 className="fw-bold mb-3">
+                <button
+                    type="button"
+                    className={`btn w-100 text-start fw-bold mb-3 ${
+                        drawEditMode && !match.completed
+                            ? "btn-outline-primary"
+                            : "btn-link text-dark p-0"
+                    } ${
+                        teamASelected
+                            ? "border-primary bg-primary text-white"
+                            : ""
+                    }`}
+                    disabled={!drawEditMode || match.completed}
+                    onClick={() =>
+                        onSelectTeamForSwap(
+                            roundId,
+                            match.teamA.id
+                        )
+                    }
+                >
+                    {teamASelected && (
+                        <i className="bi bi-check-circle-fill me-2"></i>
+                    )}
 
                     {match.teamA.name}
-
-                </h5>
+                </button>
 
                 <div className="row">
 
@@ -134,11 +166,31 @@ function MatchCard({
 
                 <hr className="my-4" />
 
-                <h5 className="fw-bold mb-3">
+                <button
+                    type="button"
+                    className={`btn w-100 text-start fw-bold mb-3 ${
+                        drawEditMode && !match.completed
+                            ? "btn-outline-primary"
+                            : "btn-link text-dark p-0"
+                    } ${
+                        teamBSelected
+                            ? "border-primary bg-primary text-white"
+                            : ""
+                    }`}
+                    disabled={!drawEditMode || match.completed}
+                    onClick={() =>
+                        onSelectTeamForSwap(
+                            roundId,
+                            match.teamB.id
+                        )
+                    }
+                >
+                    {teamBSelected && (
+                        <i className="bi bi-check-circle-fill me-2"></i>
+                    )}
 
                     {match.teamB.name}
-
-                </h5>
+                </button>
 
                 <div className="row">
 

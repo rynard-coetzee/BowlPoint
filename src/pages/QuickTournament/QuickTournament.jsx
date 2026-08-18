@@ -3,12 +3,13 @@ import PageHeader from "../../components/common/PageHeader";
 import TournamentSetup from "../../components/quickTournament/TournamentSetup";
 import FixturesCard from "../../components/quickTournament/FixturesCard";
 import StandingsCard from "../../components/quickTournament/StandingsCard";
-
 import { createTournament } from "../../models/tournament";
 import { createTeam } from "../../models/team";
-
 import { generateRoundRobinDraw } from "../../lib/drawEngine";
-import { updateMatchInTournament } from "../../lib/tournamentEngine";
+import {
+    updateMatchInTournament,
+    swapTeamsInRound
+} from "../../lib/tournamentEngine";
 import { calculateStandings } from "../../lib/standingsEngine";
 
 function QuickTournament() {
@@ -17,6 +18,10 @@ function QuickTournament() {
 
     // Controls whether the setup cards are collapsed
     const [setupCollapsed, setSetupCollapsed] = useState(false);
+
+    const [drawEditMode, setDrawEditMode] = useState(false);
+
+    const [selectedTeams, setSelectedTeams] = useState([]);
 
     const updateTournament = (field, value) => {
 
@@ -101,6 +106,81 @@ function QuickTournament() {
 
     };
 
+    const handleSelectTeamForSwap = (roundId, teamId) => {
+
+        if (!drawEditMode) {
+            return;
+        }
+
+        setSelectedTeams(prev => {
+
+            const existing = prev.find(
+                selection => selection.teamId === teamId
+            );
+
+            if (existing) {
+                return prev.filter(
+                    selection => selection.teamId !== teamId
+                );
+            }
+
+            if (prev.length >= 2) {
+                return [
+                    {
+                        roundId,
+                        teamId
+                    }
+                ];
+            }
+
+            return [
+                ...prev,
+                {
+                    roundId,
+                    teamId
+                }
+            ];
+
+        });
+
+    };
+
+    const handleSwapTeams = () => {
+
+        if (selectedTeams.length !== 2) {
+            return;
+        }
+
+        if (
+            selectedTeams[0].roundId !==
+            selectedTeams[1].roundId
+        ) {
+
+            alert("Please select two teams from the same round.");
+
+            return;
+        }
+
+        setTournament(prev =>
+            swapTeamsInRound(
+                prev,
+                selectedTeams[0].roundId,
+                selectedTeams[0].teamId,
+                selectedTeams[1].teamId
+            )
+        );
+
+        setSelectedTeams([]);
+
+    };
+
+    const cancelDrawEdit = () => {
+
+        setDrawEditMode(false);
+        setSelectedTeams([]);
+
+    };
+
     const resetTournament = () => {
 
         // Create a brand new tournament
@@ -179,6 +259,15 @@ function QuickTournament() {
             <FixturesCard
                 tournament={tournament}
                 updateMatchScore={updateMatchScore}
+                drawEditMode={drawEditMode}
+                selectedTeams={selectedTeams}
+                onSelectTeamForSwap={handleSelectTeamForSwap}
+                onSwapTeams={handleSwapTeams}
+                onCancelDrawEdit={cancelDrawEdit}
+                onStartDrawEdit={() => {
+                    setDrawEditMode(true);
+                    setSelectedTeams([]);
+                }}
             />
 
             <StandingsCard
