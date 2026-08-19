@@ -78,23 +78,29 @@ function LiveTournament() {
 
 
                 /*
-                 * Convert Supabase data into the
-                 * same structure used by BowlPoint's
-                 * existing tournament engine.
+                 * Convert Supabase teams into the
+                 * structure expected by BowlPoint.
                  */
-
                 const teams =
                     teamData
                         .map(item => item.team)
                         .filter(Boolean);
 
 
+                /*
+                 * Convert Supabase rounds/matches
+                 * into the structure expected by
+                 * standingsEngine.js
+                 */
                 const rounds =
                     roundData.map(round => ({
 
                         id: round.id,
 
                         roundNumber:
+                            round.round_number,
+
+                        number:
                             round.round_number,
 
                         status:
@@ -131,11 +137,6 @@ function LiveTournament() {
 
                     }));
 
-
-                /*
-                 * Build the tournament object expected
-                 * by standingsEngine.js
-                 */
 
                 const normalisedTournament = {
 
@@ -200,10 +201,7 @@ function LiveTournament() {
 
 
     /*
-     * Automatic refresh
-     *
-     * The public page checks Supabase every
-     * 10 seconds for new scores.
+     * Automatic refresh every 10 seconds.
      */
     useEffect(() => {
 
@@ -224,8 +222,8 @@ function LiveTournament() {
 
 
     /*
-     * Calculate standings using the SAME
-     * standings engine used by the main app.
+     * Calculate standings using the existing
+     * BowlPoint standings engine.
      */
     const standings =
         tournament
@@ -234,32 +232,9 @@ function LiveTournament() {
 
 
     /*
-     * Find the current round.
-     */
-    const currentRound =
-        tournament
-            ? (
-                tournament.rounds.find(
-                    round =>
-                        round.status ===
-                        "in_progress"
-                )
-                ||
-                tournament.rounds.find(
-                    round =>
-                        round.status ===
-                        "pending"
-                )
-                ||
-                tournament.rounds[
-                    tournament.rounds.length - 1
-                ]
-            )
-            : null;
-
-
-    /*
-     * Collect completed matches.
+     * Get all completed matches.
+     *
+     * These are displayed in the Results section.
      */
     const completedMatches = [];
 
@@ -287,6 +262,27 @@ function LiveTournament() {
         });
 
     }
+
+
+    /*
+     * Find the NEXT round.
+     *
+     * This is the first round that still has
+     * at least one incomplete match.
+     *
+     * If every round is complete, there is no
+     * next round to display.
+     */
+    const nextRound =
+        tournament
+            ? tournament.rounds.find(
+                round =>
+                    round.matches.some(
+                        match =>
+                            !match.completed
+                    )
+            )
+            : null;
 
 
     /*
@@ -512,12 +508,14 @@ function LiveTournament() {
                                             <th className="text-center">
                                                 L
                                             </th>
+
                                             <th className="text-center">
                                                 F
                                             </th>
+
                                             <th className="text-center">
                                                 A
-                                            </th>   
+                                            </th>
 
                                             <th className="text-center">
                                                 Agg
@@ -617,6 +615,7 @@ function LiveTournament() {
 
                                                     </td>
 
+
                                                     <td className="text-center">
 
                                                         {
@@ -625,6 +624,7 @@ function LiveTournament() {
 
                                                     </td>
 
+
                                                     <td className="text-center">
 
                                                         {
@@ -632,6 +632,7 @@ function LiveTournament() {
                                                         }
 
                                                     </td>
+
 
                                                     <td className="text-center">
 
@@ -687,7 +688,7 @@ function LiveTournament() {
 
 
                 {/* =========================
-                    RESULTS
+                    COMPLETED RESULTS
                 ========================= */}
 
                 <section className="live-section">
@@ -837,10 +838,10 @@ function LiveTournament() {
 
 
                 {/* =========================
-                    CURRENT ROUND
+                    NEXT ROUND
                 ========================= */}
 
-                {currentRound && (
+                {nextRound && (
 
                     <section className="live-section">
 
@@ -852,30 +853,28 @@ function LiveTournament() {
 
                                 <h2>
 
-                                    Round{" "}
-
-                                    {currentRound.roundNumber}
+                                    Next Round
 
                                 </h2>
 
                             </div>
+
+                            <span>
+
+                                Round {nextRound.roundNumber}
+
+                            </span>
 
                         </div>
 
 
                         <div className="live-current-round">
 
-                            {currentRound.matches.map(
+                            {nextRound.matches.map(
                                 match => (
 
                                     <div
-                                        className={
-                                            `live-fixture ${
-                                                match.completed
-                                                    ? "completed"
-                                                    : ""
-                                            }`
-                                        }
+                                        className="live-fixture"
                                         key={match.id}
                                     >
 
@@ -892,45 +891,17 @@ function LiveTournament() {
 
                                             </span>
 
-
-                                            {match.completed && (
-
-                                                <strong>
-
-                                                    {
-                                                        match.scoreA
-                                                    }
-
-                                                </strong>
-
-                                            )}
-
                                         </div>
 
 
                                         <div className="live-fixture-vs">
 
-                                            {match.completed
-                                                ? "–"
-                                                : "VS"}
+                                            VS
 
                                         </div>
 
 
                                         <div className="live-fixture-team text-end">
-
-                                            {match.completed && (
-
-                                                <strong>
-
-                                                    {
-                                                        match.scoreB
-                                                    }
-
-                                                </strong>
-
-                                            )}
-
 
                                             <span>
 
@@ -955,6 +926,30 @@ function LiveTournament() {
                     </section>
 
                 )}
+
+
+                {/* =========================
+                    TOURNAMENT COMPLETE
+                ========================= */}
+
+                {!nextRound &&
+                    completedMatches.length > 0 && (
+
+                        <section className="live-section">
+
+                            <div className="alert alert-success text-center">
+
+                                <i className="bi bi-trophy-fill me-2"></i>
+
+                                <strong>
+                                    Tournament Complete
+                                </strong>
+
+                            </div>
+
+                        </section>
+
+                    )}
 
 
             </main>
