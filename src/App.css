@@ -182,3 +182,15 @@
     border-right-color: var(--border);
   }
 }
+.app-card-collapsible {
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.app-card-collapsible:hover {
+    background-color: #f8f9fa !important;
+}
+
+.app-card-toggle {
+    pointer-events: auto;
+}
