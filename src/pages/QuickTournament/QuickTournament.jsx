@@ -1129,6 +1129,37 @@ function QuickTournament() {
 
             />
 
+            {tournament.supabaseTournamentId && (
+
+                <div className="bowlpoint-tournament-ready">
+
+                    <div className="bowlpoint-tournament-ready-icon">
+
+                        <i className="bi bi-check-circle-fill"></i>
+
+                    </div>
+
+                    <div>
+
+                        <div className="bowlpoint-tournament-ready-title">
+
+                            Tournament Ready
+
+                        </div>
+
+                        <div className="bowlpoint-tournament-ready-message">
+
+                            {getCurrentRoundForDisplay(
+                                tournament
+                            )}
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            )}
 
             <FixturesCard
 
@@ -1271,5 +1302,31 @@ function getSupabaseTeamId(
 
 }
 
+function getCurrentRoundForDisplay(tournament) {
+
+    const currentRound =
+        tournament.rounds.find(
+            round =>
+                round.matches.some(
+                    match =>
+                        !match.completed
+                )
+        );
+
+
+    if (currentRound) {
+
+        return `Round ${currentRound.number} is ready for scoring.`;
+
+    }
+
+
+    /*
+     * If all rounds are completed, the tournament
+     * is finished.
+     */
+    return "All rounds have been completed.";
+
+}
 
 export default QuickTournament;
