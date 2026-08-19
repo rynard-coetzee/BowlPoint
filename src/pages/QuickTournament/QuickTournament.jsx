@@ -4,7 +4,8 @@ import PageHeader from "../../components/common/PageHeader";
 import TournamentSetup from "../../components/quickTournament/TournamentSetup";
 import FixturesCard from "../../components/quickTournament/FixturesCard";
 import StandingsCard from "../../components/quickTournament/StandingsCard";
-import QRCodeCard from "../../components/quickTournament/QRCodeCard";   
+import QRCodeCard from "../../components/quickTournament/QRCodeCard";
+
 import { createTournament } from "../../models/tournament";
 import { createTeam } from "../../models/team";
 
@@ -221,7 +222,7 @@ function QuickTournament() {
     /*
      * Generate the tournament.
      *
-     * This now:
+     * This:
      *
      * 1. Generates the local draw
      * 2. Creates the tournament in Supabase
@@ -283,7 +284,7 @@ function QuickTournament() {
 
             /*
              * Keep the public code available
-             * for the QR code we'll add later.
+             * for the QR code.
              */
             setPublicCode(
                 databaseTournament.public_code
@@ -293,12 +294,6 @@ function QuickTournament() {
             /*
              * Map local team IDs to Supabase
              * team IDs.
-             *
-             * Example:
-             *
-             * local-id-123
-             *       ↓
-             * supabase-id-456
              */
             const teamIdMap =
                 new Map();
@@ -320,6 +315,18 @@ function QuickTournament() {
                 const localTeam =
                     generatedTournament
                         .teams[index];
+
+
+                /*
+                 * The generated tournament may contain
+                 * a synthetic BYE team.
+                 *
+                 * Never create that as a real
+                 * Supabase team.
+                 */
+                if (localTeam.isBye) {
+                    continue;
+                }
 
 
                 const databaseTeam =
@@ -440,6 +447,20 @@ function QuickTournament() {
                         );
 
 
+                    /*
+                     * Safety check.
+                     *
+                     * A synthetic BYE should never
+                     * become a database match.
+                     */
+                    if (
+                        !databaseTeamAId ||
+                        !databaseTeamBId
+                    ) {
+                        continue;
+                    }
+
+
                     const databaseMatch =
                         await createMatch({
 
@@ -461,10 +482,6 @@ function QuickTournament() {
                     /*
                      * Attach the Supabase match ID
                      * to the local match.
-                     *
-                     * This lets Save Score know
-                     * exactly which database record
-                     * to update.
                      */
                     localMatch.supabaseMatchId =
                         databaseMatch.id;
@@ -529,6 +546,9 @@ function QuickTournament() {
 
     /*
      * Select a team for draw swapping.
+     *
+     * This now also supports selecting the
+     * team currently receiving a BYE.
      */
     const handleSelectTeamForSwap = (
         roundId,
@@ -602,6 +622,12 @@ function QuickTournament() {
     /*
      * Swap two teams in a round.
      *
+     * Supports:
+     *
+     * Team ↔ Team
+     *
+     * Team ↔ BYE
+     *
      * The local tournament is updated first,
      * then the affected database matches
      * are synchronised.
@@ -611,6 +637,7 @@ function QuickTournament() {
         if (selectedTeams.length !== 2) {
             return;
         }
+
 
         if (
             selectedTeams[0].roundId !==
@@ -622,105 +649,223 @@ function QuickTournament() {
             );
 
             return;
+
         }
+
 
         const roundId =
             selectedTeams[0].roundId;
 
+
         const teamAId =
             selectedTeams[0].teamId;
+
 
         const teamBId =
             selectedTeams[1].teamId;
 
 
-        const swappedTournament =
-            swapTeamsInRound(
-                tournament,
-                roundId,
-                teamAId,
-                teamBId
-            );
+        try {
+
+            /*
+             * Perform the local swap.
+             *
+             * The updated tournamentEngine
+             * supports both normal team swaps
+             * and Team ↔ BYE swaps.
+             */
+            const swappedTournament =
+                swapTeamsInRound(
+                    tournament,
+                    roundId,
+                    teamAId,
+                    teamBId
+                );
 
 
-        const affectedRound =
-            swappedTournament.rounds.find(
-                round =>
-                    round.id === roundId
-            );
+            /*
+             * Find the updated round.
+             */
+            const affectedRound =
+                swappedTournament.rounds.find(
+                    round =>
+                        round.id ===
+                        roundId
+                );
 
 
-        if (
-            affectedRound &&
-            tournament.supabaseTournamentId
-        ) {
+            if (!affectedRound) {
 
-            try {
+                throw new Error(
+                    "Unable to find the selected round."
+                );
+
+            }
+
+
+            /*
+             * --------------------------------------------------
+             * SUPABASE DATABASE UPDATE
+             * --------------------------------------------------
+             *
+             * We update only unfinished matches.
+             *
+             * A BYE is never stored in Supabase as a team.
+             * When a BYE is swapped, the affected match now
+             * contains two real teams, so it can be updated
+             * normally.
+             */
+            if (
+                affectedRound &&
+                tournament.supabaseTournamentId
+            ) {
 
                 for (
-                    const match of affectedRound.matches
+                    const match
+                    of affectedRound.matches
                 ) {
 
-                    if (!match.supabaseMatchId) {
+                    /*
+                     * Do not touch completed matches.
+                     *
+                     * This is particularly important because
+                     * changing a completed match would alter
+                     * historical results.
+                     */
+                    if (
+                        match.completed
+                    ) {
+
                         continue;
+
                     }
 
 
+                    /*
+                     * No database match ID means there is
+                     * nothing to update.
+                     */
+                    if (
+                        !match.supabaseMatchId
+                    ) {
+
+                        continue;
+
+                    }
+
+
+                    /*
+                     * Never attempt to save a synthetic
+                     * BYE as a database team.
+                     */
+                    if (
+                        match.teamA?.isBye ||
+                        match.teamB?.isBye
+                    ) {
+
+                        continue;
+
+                    }
+
+
+                    /*
+                     * Find the corresponding local teams.
+                     */
                     const databaseTeamA =
-                        swappedTournament.teams.find(
-                            team =>
-                                team.id ===
-                                match.teamA.id
-                        );
+                        swappedTournament
+                            .teams
+                            .find(
+                                team =>
+                                    team.id ===
+                                    match.teamA.id
+                            );
 
 
                     const databaseTeamB =
-                        swappedTournament.teams.find(
-                            team =>
-                                team.id ===
-                                match.teamB.id
-                        );
+                        swappedTournament
+                            .teams
+                            .find(
+                                team =>
+                                    team.id ===
+                                    match.teamB.id
+                            );
 
 
+                    /*
+                     * Both teams must have real
+                     * Supabase IDs.
+                     */
+                    if (
+                        !databaseTeamA?.supabaseTeamId ||
+                        !databaseTeamB?.supabaseTeamId
+                    ) {
+
+                        continue;
+
+                    }
+
+
+                    /*
+                     * Update the database match.
+                     */
                     await updateMatchTeams({
 
                         matchId:
                             match.supabaseMatchId,
 
                         teamAId:
-                            databaseTeamA?.supabaseTeamId,
+                            databaseTeamA
+                                .supabaseTeamId,
 
                         teamBId:
-                            databaseTeamB?.supabaseTeamId
+                            databaseTeamB
+                                .supabaseTeamId
 
                     });
 
                 }
 
-            } catch (error) {
-
-                console.error(
-                    "Failed to update draw:",
-                    error
-                );
-
-
-                alert(
-                    "The draw was changed locally, " +
-                    "but could not be fully updated in Supabase.\n\n" +
-                    error.message
-                );
-
             }
 
+
+            /*
+             * Only update the UI after the database
+             * synchronisation has completed.
+             */
+            setTournament(
+                swappedTournament
+            );
+
+
+            /*
+             * IMPORTANT:
+             *
+             * Automatically leave Change Draw mode
+             * after a successful swap.
+             *
+             * This fixes the issue where clicking
+             * a player/team afterwards accidentally
+             * selects it for another swap.
+             */
+            setSelectedTeams([]);
+
+            setDrawEditMode(false);
+
+
+        } catch (error) {
+
+            console.error(
+                "Failed to swap teams:",
+                error
+            );
+
+
+            alert(
+                "Failed to swap teams.\n\n" +
+                error.message
+            );
+
         }
-
-
-        setTournament(
-            swappedTournament
-        );
-
-        setSelectedTeams([]);
 
     };
 
@@ -839,6 +984,7 @@ function QuickTournament() {
 
                 });
 
+
             } catch (error) {
 
                 console.error(
@@ -935,7 +1081,9 @@ function QuickTournament() {
 
             <TournamentSetup
 
-                tournament={tournament}
+                tournament={
+                    tournament
+                }
 
                 updateTournament={
                     updateTournament
@@ -1007,8 +1155,12 @@ function QuickTournament() {
                 }}
 
             />
+
+
             <QRCodeCard
-                publicCode={publicCode}
+                publicCode={
+                    publicCode
+                }
             />
 
 
