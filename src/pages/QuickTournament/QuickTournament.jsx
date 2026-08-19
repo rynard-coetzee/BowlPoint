@@ -513,12 +513,26 @@ function QuickTournament() {
                 finalTournament
             );
 
+            setSetupCollapsed(true);
+
 
             /*
-             * Collapse setup after
-             * successful generation.
-             */
-            setSetupCollapsed(true);
+            * Return the user to the top after the
+            * generated tournament has rendered.
+            */
+            setTimeout(() => {
+
+                window.scrollTo({
+
+                    top: 0,
+
+                    left: 0,
+
+                    behavior: "smooth"
+
+                });
+
+            }, 50);
 
 
         } catch (error) {
