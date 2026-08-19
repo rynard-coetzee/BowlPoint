@@ -194,3 +194,56 @@
 .app-card-toggle {
     pointer-events: auto;
 }
+/* =========================================
+   Draw Editing Toolbar
+========================================= */
+
+.bowlpoint-draw-toolbar {
+    position: sticky;
+    top: 10px;
+    z-index: 20;
+
+    padding: 16px;
+
+    margin-bottom: 20px;
+
+    background: #fff;
+
+    border: 2px solid #0d6efd;
+
+    border-radius: 12px;
+
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+
+/* Selected teams */
+
+.bowlpoint-selected-teams {
+    display: flex;
+
+    flex-wrap: wrap;
+
+    gap: 8px;
+}
+
+
+/* Mobile */
+
+@media (max-width: 767.98px) {
+
+    .bowlpoint-draw-toolbar {
+
+        position: sticky;
+
+        top: 5px;
+
+        padding: 14px;
+
+        margin-left: -8px;
+
+        margin-right: -8px;
+
+    }
+
+}
