@@ -1,11 +1,19 @@
-import { useState } from "react";
+import {
+    useEffect,
+    useState
+} from "react";
+
+import {
+    useNavigate,
+    useParams
+} from "react-router-dom";
 
 import PageHeader from "../../components/common/PageHeader";
 import TournamentSetup from "../../components/quickTournament/TournamentSetup";
 import FixturesCard from "../../components/quickTournament/FixturesCard";
 import StandingsCard from "../../components/quickTournament/StandingsCard";
 import QRCodeCard from "../../components/quickTournament/QRCodeCard";
-
+import { loadTournament } from "../../services/supabase/tournamentLoader";
 import { createTournament } from "../../models/tournament";
 import { createTeam } from "../../models/team";
 
@@ -49,7 +57,41 @@ function QuickTournament() {
     const [tournament, setTournament] =
         useState(createTournament());
 
+        /*
+     * Tournament ID from the URL.
+     *
+     * When a tournament is opened as:
+     *
+     * /quick-tournament/<tournament-id>
+     *
+     * this identifies which tournament should
+     * be loaded from Supabase.
+     */
+    const {
+        tournamentId
+    } = useParams();
 
+    const navigate = useNavigate();
+
+    /*
+     * Loading state used when reopening a
+     * persistent tournament.
+     */
+    const [
+        loadingTournament,
+        setLoadingTournament
+    ] = useState(
+        Boolean(tournamentId)
+    );
+
+
+    /*
+     * Error encountered while loading.
+     */
+    const [
+        tournamentLoadError,
+        setTournamentLoadError
+    ] = useState(null);
     /*
      * Controls whether the setup card is collapsed.
      */
@@ -80,7 +122,120 @@ function QuickTournament() {
     const [publicCode, setPublicCode] =
         useState(null);
 
+        /*
+     * Load an existing tournament when the page
+     * is opened with a tournament ID.
+     *
+     * If there is no tournament ID, this is a
+     * brand-new tournament and the normal
+     * setup screen is shown.
+     */
+    useEffect(() => {
 
+        if (!tournamentId) {
+
+            setLoadingTournament(false);
+
+            return;
+
+        }
+
+
+        let cancelled = false;
+
+
+        const restoreTournament =
+            async () => {
+
+                try {
+
+                    setLoadingTournament(true);
+
+                    setTournamentLoadError(null);
+
+
+                    const loadedTournament =
+                        await loadTournament(
+                            tournamentId
+                        );
+
+
+                    if (cancelled) {
+                        return;
+                    }
+
+
+                    /*
+                     * Restore the complete tournament
+                     * into React state.
+                     */
+                    setTournament(
+                        loadedTournament
+                    );
+
+
+                    /*
+                     * Restore public QR code.
+                     */
+                    setPublicCode(
+                        loadedTournament.publicCode
+                    );
+
+
+                    /*
+                     * Existing tournaments have already
+                     * been generated, so keep setup collapsed.
+                     */
+                    setSetupCollapsed(
+                        loadedTournament.status !==
+                        "setup"
+                    );
+
+
+                } catch (error) {
+
+                    if (cancelled) {
+                        return;
+                    }
+
+
+                    console.error(
+                        "Failed to load tournament:",
+                        error
+                    );
+
+
+                    setTournamentLoadError(
+                        error.message ||
+                        "Unable to load tournament."
+                    );
+
+
+                } finally {
+
+                    if (!cancelled) {
+
+                        setLoadingTournament(false);
+
+                    }
+
+                }
+
+            };
+
+
+        restoreTournament();
+
+
+        return () => {
+
+            cancelled = true;
+
+        };
+
+    }, [
+        tournamentId
+    ]);
     /*
      * Update tournament fields.
      */
@@ -499,12 +654,18 @@ function QuickTournament() {
 
                 ...generatedTournament,
 
+                /*
+                * The Supabase tournament ID is now the
+                * canonical tournament ID.
+                */
+                id:
+                    databaseTournament.id,
+
                 supabaseTournamentId:
                     databaseTournament.id,
 
                 publicCode:
-                    databaseTournament
-                        .public_code
+                    databaseTournament.public_code
 
             };
 
@@ -514,8 +675,19 @@ function QuickTournament() {
             );
 
             setSetupCollapsed(true);
-
-
+            
+                        /*
+            * Give the tournament its permanent URL.
+            *
+            * From this point onward, refreshing the browser
+            * will reload this tournament from Supabase.
+            */
+            navigate(
+                `/quick-tournament/${databaseTournament.id}`,
+                {
+                    replace: true
+                }
+            );
             /*
             * Return the user to the top after the
             * generated tournament has rendered.
@@ -1075,19 +1247,138 @@ function QuickTournament() {
             tournament
         );
 
+        /*
+     * Show a loading screen while an existing
+     * tournament is being restored.
+     */
+    if (loadingTournament) {
 
+        return (
+
+            <>
+
+                <PageHeader
+
+                    title="Tournament Manager"
+
+                    subtitle="Loading tournament..."
+
+                />
+
+
+                <div className="card shadow-sm border-0 mt-4">
+
+                    <div className="card-body text-center py-5">
+
+                        <div
+                            className="spinner-border text-primary mb-3"
+                            role="status"
+                        >
+
+                            <span className="visually-hidden">
+                                Loading...
+                            </span>
+
+                        </div>
+
+
+                        <h5>
+                            Loading Tournament
+                        </h5>
+
+
+                        <p className="text-muted mb-0">
+
+                            Restoring your tournament and scores...
+
+                        </p>
+
+                    </div>
+
+                </div>
+
+            </>
+
+        );
+
+    }
+
+
+    /*
+     * Show an error if the tournament could not
+     * be restored.
+     */
+    if (tournamentLoadError) {
+
+        return (
+
+            <>
+
+                <PageHeader
+
+                    title="Tournament Manager"
+
+                    subtitle="Unable to load tournament"
+
+                />
+
+
+                <div className="alert alert-danger mt-4">
+
+                    <h5 className="alert-heading">
+
+                        <i className="bi bi-exclamation-triangle-fill me-2"></i>
+
+                        Tournament could not be loaded
+
+                    </h5>
+
+
+                    <p className="mb-3">
+
+                        {tournamentLoadError}
+
+                    </p>
+
+
+                    <button
+                        type="button"
+                        className="btn btn-outline-danger"
+                        onClick={() =>
+                            window.location.href =
+                                "/quick-tournament"
+                        }
+                    >
+
+                        <i className="bi bi-arrow-left me-2"></i>
+
+                        Back to Tournaments
+
+                    </button>
+
+                </div>
+
+            </>
+
+        );
+
+    }
+        
     return (
 
         <>
 
             <PageHeader
 
-                title="Quick Tournament"
+                title={
+                    tournament.name ||
+                    "Tournament Manager"
+                }
 
                 subtitle={
                     publicCode
                         ? `Live tournament • Code: ${publicCode}`
-                        : "Run a tournament without creating a full competition."
+                        : "Create, manage and score your tournaments."
                 }
 
             />
