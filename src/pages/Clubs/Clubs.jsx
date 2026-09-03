@@ -1,141 +1,63 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
-function Players() {
+function Clubs() {
 
-    const [players, setPlayers] = useState([]);
     const [clubs, setClubs] = useState([]);
-
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-
     const [search, setSearch] = useState("");
 
     const [showForm, setShowForm] = useState(false);
-    const [editingPlayer, setEditingPlayer] = useState(null);
 
-    const editFormRef = useRef(null);
+    const [editingClub, setEditingClub] = useState(null);
 
     const [form, setForm] = useState({
-        first_name: "",
-        last_name: "",
-        club_id: "",
-        date_registered: "",
-        bsa_number: "",
-        id_number: "",
+        name: "",
+        short_name: "",
+        contact_name: "",
+        contact_email: "",
+        contact_phone: "",
         active: true
     });
 
 
     /*
-     * Load players and clubs
+     * Load clubs
      */
-    const loadData = async () => {
+    const loadClubs = async () => {
 
         setLoading(true);
 
-        const [
-            playersResult,
-            clubsResult
-        ] = await Promise.all([
+        const { data, error } = await supabase
+            .from("clubs")
+            .select("*")
+            .order("name");
 
-            supabase
-                .from("players")
-                .select(`
-                    id,
-                    first_name,
-                    last_name,
-                    display_name,
-                    club_id,
-                    date_registered,
-                    bsa_number,
-                    id_number,
-                    active,
-                    clubs (
-                        id,
-                        name,
-                        short_name,
-                        active
-                    )
-                `)
-                .order("first_name")
-                .order("last_name"),
+        if (error) {
 
-            supabase
-                .from("clubs")
-                .select("*")
-                .eq("active", true)
-                .order("name")
-
-        ]);
-
-
-        if (playersResult.error) {
-
-            console.error(
-                "Error loading players:",
-                playersResult.error
-            );
+            console.error("Error loading clubs:", error);
 
             alert(
-                `Unable to load players.\n\n${playersResult.error.message}`
+                `Unable to load clubs.\n\n${error.message}`
             );
 
             setLoading(false);
 
             return;
-
         }
 
-
-        if (clubsResult.error) {
-
-            console.error(
-                "Error loading clubs:",
-                clubsResult.error
-            );
-
-            alert(
-                `Unable to load clubs.\n\n${clubsResult.error.message}`
-            );
-
-            setLoading(false);
-
-            return;
-
-        }
-
-
-        setPlayers(playersResult.data || []);
-        setClubs(clubsResult.data || []);
+        setClubs(data || []);
 
         setLoading(false);
-
     };
 
 
     useEffect(() => {
 
-        loadData();
+        loadClubs();
 
     }, []);
-
-
-    useEffect(() => {
-
-        if (!showForm || !editingPlayer || !editFormRef.current) {
-            return;
-        }
-
-        // Wait for the edit card to render before scrolling to it.
-        requestAnimationFrame(() => {
-            editFormRef.current?.scrollIntoView({
-                behavior: "smooth",
-                block: "start"
-            });
-        });
-
-    }, [showForm, editingPlayer]);
 
 
     /*
@@ -144,24 +66,23 @@ function Players() {
     const resetForm = () => {
 
         setForm({
-            first_name: "",
-            last_name: "",
-            club_id: "",
-            date_registered: "",
-            bsa_number: "",
-            id_number: "",
+            name: "",
+            short_name: "",
+            contact_name: "",
+            contact_email: "",
+            contact_phone: "",
             active: true
         });
 
-        setEditingPlayer(null);
+        setEditingClub(null);
 
     };
 
 
     /*
-     * Add player
+     * Open Add form
      */
-    const handleAddPlayer = () => {
+    const handleAddClub = () => {
 
         resetForm();
 
@@ -171,20 +92,19 @@ function Players() {
 
 
     /*
-     * Edit player
+     * Open Edit form
      */
-    const handleEditPlayer = (player) => {
+    const handleEditClub = (club) => {
 
-        setEditingPlayer(player);
+        setEditingClub(club);
 
         setForm({
-            first_name: player.first_name || "",
-            last_name: player.last_name || "",
-            club_id: player.club_id || "",
-            date_registered: player.date_registered || "",
-            bsa_number: player.bsa_number || "",
-            id_number: player.id_number || "",
-            active: player.active ?? true
+            name: club.name || "",
+            short_name: club.short_name || "",
+            contact_name: club.contact_name || "",
+            contact_email: club.contact_email || "",
+            contact_phone: club.contact_phone || "",
+            active: club.active ?? true
         });
 
         setShowForm(true);
@@ -193,16 +113,11 @@ function Players() {
 
 
     /*
-     * Form changes
+     * Form change
      */
     const handleChange = (e) => {
 
-        const {
-            name,
-            value,
-            type,
-            checked
-        } = e.target;
+        const { name, value, type, checked } = e.target;
 
         setForm(prev => ({
             ...prev,
@@ -216,34 +131,15 @@ function Players() {
 
 
     /*
-     * Save player
+     * Save club
      */
     const handleSave = async (e) => {
 
         e.preventDefault();
 
+        if (!form.name.trim()) {
 
-        if (!form.first_name.trim()) {
-
-            alert("Please enter the player's first name.");
-
-            return;
-
-        }
-
-
-        if (!form.last_name.trim()) {
-
-            alert("Please enter the player's surname.");
-
-            return;
-
-        }
-
-
-        if (!form.club_id) {
-
-            alert("Please select a club.");
+            alert("Please enter a club name.");
 
             return;
 
@@ -254,47 +150,31 @@ function Players() {
 
 
         const payload = {
-
-            first_name:
-                form.first_name.trim(),
-
-            last_name:
-                form.last_name.trim(),
-
-            club_id:
-                form.club_id,
-
-            date_registered:
-                form.date_registered || null,
-
-            bsa_number:
-                form.bsa_number.trim() || null,
-
-            id_number:
-                form.id_number.trim() || null,
-
-            active:
-                form.active
-
+            name: form.name.trim(),
+            short_name: form.short_name.trim() || null,
+            contact_name: form.contact_name.trim() || null,
+            contact_email: form.contact_email.trim() || null,
+            contact_phone: form.contact_phone.trim() || null,
+            active: form.active
         };
 
 
         let error;
 
 
-        if (editingPlayer) {
+        if (editingClub) {
 
             const result = await supabase
-                .from("players")
+                .from("clubs")
                 .update(payload)
-                .eq("id", editingPlayer.id);
+                .eq("id", editingClub.id);
 
             error = result.error;
 
         } else {
 
             const result = await supabase
-                .from("players")
+                .from("clubs")
                 .insert(payload);
 
             error = result.error;
@@ -307,13 +187,10 @@ function Players() {
 
         if (error) {
 
-            console.error(
-                "Error saving player:",
-                error
-            );
+            console.error("Error saving club:", error);
 
             alert(
-                `Unable to save player.\n\n${error.message}`
+                `Unable to save club.\n\n${error.message}`
             );
 
             return;
@@ -325,15 +202,15 @@ function Players() {
 
         resetForm();
 
-        await loadData();
+        await loadClubs();
 
     };
 
 
     /*
-     * Filter players
+     * Filter clubs
      */
-    const filteredPlayers = players.filter(player => {
+    const filteredClubs = clubs.filter(club => {
 
         const searchText =
             search.trim().toLowerCase();
@@ -342,33 +219,18 @@ function Players() {
             return true;
         }
 
-
-        const fullName = `
-            ${player.first_name || ""}
-            ${player.last_name || ""}
-        `.trim().toLowerCase();
-
-
-        const clubName =
-            player.clubs?.name
-                ?.toLowerCase() || "";
-
-
-        const shortClubName =
-            player.clubs?.short_name
-                ?.toLowerCase() || "";
-
-
-        const bsaNumber =
-            player.bsa_number
-                ?.toLowerCase() || "";
-
-
         return (
-            fullName.includes(searchText) ||
-            clubName.includes(searchText) ||
-            shortClubName.includes(searchText) ||
-            bsaNumber.includes(searchText)
+            club.name
+                ?.toLowerCase()
+                .includes(searchText) ||
+
+            club.short_name
+                ?.toLowerCase()
+                .includes(searchText) ||
+
+            club.contact_name
+                ?.toLowerCase()
+                .includes(searchText)
         );
 
     });
@@ -385,11 +247,11 @@ function Players() {
                 <div>
 
                     <h1 className="mb-1">
-                        Players
+                        Clubs
                     </h1>
 
                     <p className="text-muted mb-0">
-                        Manage registered BowlPoint players.
+                        Manage the clubs registered with BowlPoint.
                     </p>
 
                 </div>
@@ -398,12 +260,12 @@ function Players() {
                 <button
                     type="button"
                     className="btn btn-primary"
-                    onClick={handleAddPlayer}
+                    onClick={handleAddClub}
                 >
 
-                    <i className="bi bi-person-plus-fill me-2"></i>
+                    <i className="bi bi-plus-lg me-2"></i>
 
-                    Add Player
+                    Add Club
 
                 </button>
 
@@ -427,7 +289,7 @@ function Players() {
                         <input
                             type="text"
                             className="form-control"
-                            placeholder="Search by name, club or BSA number..."
+                            placeholder="Search clubs..."
                             value={search}
                             onChange={(e) =>
                                 setSearch(e.target.value)
@@ -441,24 +303,21 @@ function Players() {
             </div>
 
 
-            {/* Player form */}
+            {/* Club form */}
 
             {showForm && (
 
-                <div
-                    ref={editFormRef}
-                    className="card shadow-sm border-0 mb-4"
-                >
+                <div className="card shadow-sm border-0 mb-4">
 
                     <div className="card-header bg-white">
 
                         <h5 className="mb-0">
 
-                            <i className="bi bi-person-fill me-2"></i>
+                            <i className="bi bi-building me-2"></i>
 
-                            {editingPlayer
-                                ? "Edit Player"
-                                : "Add Player"
+                            {editingClub
+                                ? "Edit Club"
+                                : "Add Club"
                             }
 
                         </h5>
@@ -472,151 +331,105 @@ function Players() {
 
                             <div className="row g-3">
 
-                                {/* First name */}
-
-                                <div className="col-md-6">
+                                <div className="col-md-8">
 
                                     <label className="form-label">
-                                        Name
+                                        Club Name
                                     </label>
 
                                     <input
                                         type="text"
-                                        name="first_name"
+                                        name="name"
                                         className="form-control"
-                                        value={form.first_name}
+                                        value={form.name}
                                         onChange={handleChange}
+                                        placeholder="Enter club name"
                                         required
                                     />
 
                                 </div>
 
 
-                                {/* Surname */}
-
-                                <div className="col-md-6">
+                                <div className="col-md-4">
 
                                     <label className="form-label">
-                                        Surname
+                                        Short Name
                                     </label>
 
                                     <input
                                         type="text"
-                                        name="last_name"
+                                        name="short_name"
                                         className="form-control"
-                                        value={form.last_name}
+                                        value={form.short_name}
                                         onChange={handleChange}
-                                        required
+                                        placeholder="Optional"
                                     />
 
                                 </div>
 
 
-                                {/* Club */}
-
                                 <div className="col-md-6">
 
                                     <label className="form-label">
-                                        Club
-                                    </label>
-
-                                    <select
-                                        name="club_id"
-                                        className="form-select"
-                                        value={form.club_id}
-                                        onChange={handleChange}
-                                        required
-                                    >
-
-                                        <option value="">
-                                            Select club...
-                                        </option>
-
-                                        {clubs.map(club => (
-
-                                            <option
-                                                key={club.id}
-                                                value={club.id}
-                                            >
-
-                                                {club.name}
-
-                                            </option>
-
-                                        ))}
-
-                                    </select>
-
-                                </div>
-
-
-                                {/* Date registered */}
-
-                                <div className="col-md-6">
-
-                                    <label className="form-label">
-                                        Date Registered
-                                    </label>
-
-                                    <input
-                                        type="date"
-                                        name="date_registered"
-                                        className="form-control"
-                                        value={form.date_registered}
-                                        onChange={handleChange}
-                                    />
-
-                                </div>
-
-
-                                {/* BSA */}
-
-                                <div className="col-md-6">
-
-                                    <label className="form-label">
-                                        BSA Number
+                                        Contact Name
                                     </label>
 
                                     <input
                                         type="text"
-                                        name="bsa_number"
+                                        name="contact_name"
                                         className="form-control"
-                                        value={form.bsa_number}
+                                        value={form.contact_name}
                                         onChange={handleChange}
+                                        placeholder="Optional"
                                     />
 
                                 </div>
 
-
-                                {/* ID */}
 
                                 <div className="col-md-6">
 
                                     <label className="form-label">
-                                        ID Number
+                                        Contact Email
                                     </label>
 
                                     <input
-                                        type="text"
-                                        name="id_number"
+                                        type="email"
+                                        name="contact_email"
                                         className="form-control"
-                                        value={form.id_number}
+                                        value={form.contact_email}
                                         onChange={handleChange}
+                                        placeholder="Optional"
                                     />
 
                                 </div>
 
 
-                                {/* Active */}
+                                <div className="col-md-6">
 
-                                <div className="col-12">
+                                    <label className="form-label">
+                                        Contact Phone
+                                    </label>
 
-                                    <div className="form-check">
+                                    <input
+                                        type="text"
+                                        name="contact_phone"
+                                        className="form-control"
+                                        value={form.contact_phone}
+                                        onChange={handleChange}
+                                        placeholder="Optional"
+                                    />
+
+                                </div>
+
+
+                                <div className="col-md-6 d-flex align-items-end">
+
+                                    <div className="form-check mb-2">
 
                                         <input
                                             type="checkbox"
                                             className="form-check-input"
-                                            id="playerActive"
+                                            id="clubActive"
                                             name="active"
                                             checked={form.active}
                                             onChange={handleChange}
@@ -624,9 +437,9 @@ function Players() {
 
                                         <label
                                             className="form-check-label"
-                                            htmlFor="playerActive"
+                                            htmlFor="clubActive"
                                         >
-                                            Active player
+                                            Active club
                                         </label>
 
                                     </div>
@@ -680,9 +493,9 @@ function Players() {
                                     <>
                                         <i className="bi bi-check-lg me-2"></i>
 
-                                        {editingPlayer
+                                        {editingClub
                                             ? "Save Changes"
-                                            : "Save Player"
+                                            : "Save Club"
                                         }
 
                                     </>
@@ -700,7 +513,7 @@ function Players() {
             )}
 
 
-            {/* Players table */}
+            {/* Clubs */}
 
             <div className="card shadow-sm border-0">
 
@@ -708,14 +521,14 @@ function Players() {
 
                     <h5 className="mb-0">
 
-                        <i className="bi bi-people-fill me-2"></i>
+                        <i className="bi bi-buildings me-2"></i>
 
-                        Registered Players
+                        Registered Clubs
 
                     </h5>
 
                     <span className="badge bg-primary">
-                        {filteredPlayers.length}
+                        {filteredClubs.length}
                     </span>
 
                 </div>
@@ -732,28 +545,28 @@ function Players() {
                             ></div>
 
                             <div className="text-muted mt-2">
-                                Loading players...
+                                Loading clubs...
                             </div>
 
                         </div>
 
-                    ) : filteredPlayers.length === 0 ? (
+                    ) : filteredClubs.length === 0 ? (
 
                         <div className="text-center py-5">
 
                             <i
-                                className="bi bi-person display-4 text-muted"
+                                className="bi bi-building display-4 text-muted"
                             ></i>
 
                             <h5 className="mt-3">
-                                No players found
+                                No clubs found
                             </h5>
 
                             <p className="text-muted mb-0">
 
                                 {search
                                     ? "Try changing your search."
-                                    : "Add your first player to get started."
+                                    : "Add your first club to get started."
                                 }
 
                             </p>
@@ -771,19 +584,19 @@ function Players() {
                                     <tr>
 
                                         <th>
-                                            Player
-                                        </th>
-
-                                        <th>
                                             Club
                                         </th>
 
                                         <th>
-                                            BSA Number
+                                            Short Name
                                         </th>
 
                                         <th>
-                                            Date Registered
+                                            Contact
+                                        </th>
+
+                                        <th>
+                                            Phone
                                         </th>
 
                                         <th>
@@ -801,43 +614,47 @@ function Players() {
 
                                 <tbody>
 
-                                    {filteredPlayers.map(player => (
+                                    {filteredClubs.map(club => (
 
-                                        <tr key={player.id}>
+                                        <tr key={club.id}>
 
                                             <td>
 
                                                 <strong>
-                                                    {player.first_name}{" "}
-                                                    {player.last_name}
+                                                    {club.name}
                                                 </strong>
 
                                             </td>
 
 
                                             <td>
-
-                                                {player.clubs?.short_name
-                                                    ? player.clubs.short_name
-                                                    : player.clubs?.name || "—"
-                                                }
-
-                                            </td>
-
-
-                                            <td>
-                                                {player.bsa_number || "—"}
-                                            </td>
-
-
-                                            <td>
-                                                {player.date_registered || "—"}
+                                                {club.short_name || "—"}
                                             </td>
 
 
                                             <td>
 
-                                                {player.active ? (
+                                                {club.contact_name || "—"}
+
+                                                {club.contact_email && (
+
+                                                    <div className="small text-muted">
+                                                        {club.contact_email}
+                                                    </div>
+
+                                                )}
+
+                                            </td>
+
+
+                                            <td>
+                                                {club.contact_phone || "—"}
+                                            </td>
+
+
+                                            <td>
+
+                                                {club.active ? (
 
                                                     <span className="badge bg-success">
                                                         Active
@@ -860,7 +677,7 @@ function Players() {
                                                     type="button"
                                                     className="btn btn-sm btn-outline-primary"
                                                     onClick={() =>
-                                                        handleEditPlayer(player)
+                                                        handleEditClub(club)
                                                     }
                                                 >
 
@@ -894,4 +711,4 @@ function Players() {
 
 }
 
-export default Players;
+export default Clubs;

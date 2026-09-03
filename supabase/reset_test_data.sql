@@ -1,0 +1,10 @@
+-- BowlPoint TEST DATA RESET
+-- Run cleanup first, then run the seed script.
+-- In Supabase SQL Editor, execute:
+--
+--   1. cleanup_test_data.sql
+--   2. seed_test_data.sql
+--
+-- This file is intentionally a simple guide rather than dynamically
+-- executing another SQL file, because Supabase SQL Editor does not
+-- provide a portable \i/include mechanism.

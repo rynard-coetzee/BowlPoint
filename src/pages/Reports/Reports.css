@@ -1,0 +1,40 @@
+.bowlpoint-reports .report-controls,
+.bowlpoint-reports .report-heading,
+.bowlpoint-reports .report-table-card,
+.bowlpoint-reports .report-stat-card {
+    border-radius: 0.75rem;
+}
+
+.bowlpoint-reports .report-stat-card {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.bowlpoint-reports .report-stat-card:hover {
+    transform: translateY(-2px);
+}
+
+.bowlpoint-reports .report-tabs .btn {
+    white-space: nowrap;
+}
+
+.bowlpoint-reports .report-table-card .table th {
+    white-space: nowrap;
+    font-size: 0.82rem;
+}
+
+.bowlpoint-reports .report-table-card .table td {
+    white-space: nowrap;
+}
+
+@media print {
+    .bowlpoint-reports .report-controls,
+    .bowlpoint-reports > .d-flex:first-child button,
+    .bowlpoint-reports .report-tabs {
+        display: none !important;
+    }
+
+    .bowlpoint-reports .card {
+        box-shadow: none !important;
+        border: 1px solid #ddd !important;
+    }
+}

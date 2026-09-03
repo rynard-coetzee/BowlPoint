@@ -7,7 +7,7 @@ const navigation = [
     },
 
     {
-        title: "Tournament Manager",
+        title: "Quick Score",
         path: "/quick-tournament",
         icon: "diagram-3-fill"
     },
@@ -19,15 +19,15 @@ const navigation = [
     },
 
     {
-        title: "Players",
-        path: "/players",
-        icon: "person-fill"
+        title: "Clubs",
+        path: "/clubs",
+        icon: "building-fill"
     },
 
     {
-        title: "Teams",
-        path: "/teams",
-        icon: "people-fill"
+        title: "Players",
+        path: "/players",
+        icon: "person-fill"
     },
 
     {
