@@ -8,7 +8,7 @@ const navigation = [
 
     {
         title: "Quick Score",
-        path: "/quick-tournament",
+        path: "/quick-score",
         icon: "diagram-3-fill"
     },
 
@@ -20,12 +20,14 @@ const navigation = [
 
     {
         title: "Clubs",
+        roles: ["admin", "comp_secretary"],
         path: "/clubs",
         icon: "building-fill"
     },
 
     {
         title: "Players",
+        roles: ["admin", "comp_secretary"],
         path: "/players",
         icon: "person-fill"
     },
@@ -37,7 +39,15 @@ const navigation = [
     },
 
     {
+        title: "Users",
+        path: "/users",
+        icon: "people-fill",
+        roles: ["admin", "comp_secretary"]
+    },
+
+    {
         title: "Settings",
+        roles: ["admin", "comp_secretary"],
         path: "/settings",
         icon: "gear-fill"
     }

@@ -211,8 +211,8 @@ function Reports() {
                 b.wins - a.wins ||
                 b.aggregate - a.aggregate ||
                 b.shotsFor - a.shotsFor ||
-                (a.player.display_name || `${a.player.first_name} ${a.player.last_name}`).localeCompare(
-                    b.player.display_name || `${b.player.first_name} ${b.player.last_name}`
+                (playerLabel(a.player)).localeCompare(
+                    playerLabel(b.player)
                 )
             );
     }, [reportData]);
@@ -308,7 +308,11 @@ function Reports() {
 
     const teamLabel = (team) => team?.team_name || "Unknown team";
 
-    const playerLabel = (player) => player?.display_name || `${player?.first_name || ""} ${player?.last_name || ""}`.trim() || "Unknown player";
+    const playerLabel = (player) => {
+        if (!player) return "Unknown player";
+        const givenName = player.nickname || player.first_name || "";
+        return `${givenName} ${player.last_name || ""}`.trim() || player.display_name || "Unknown player";
+    };
 
     const exportCsv = () => {
         if (!reportData) return;

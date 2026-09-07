@@ -18,6 +18,7 @@ function Players() {
 
     const [form, setForm] = useState({
         first_name: "",
+        nickname: "",
         last_name: "",
         club_id: "",
         date_registered: "",
@@ -44,6 +45,7 @@ function Players() {
                 .select(`
                     id,
                     first_name,
+                    nickname,
                     last_name,
                     display_name,
                     club_id,
@@ -145,6 +147,7 @@ function Players() {
 
         setForm({
             first_name: "",
+            nickname: "",
             last_name: "",
             club_id: "",
             date_registered: "",
@@ -179,6 +182,7 @@ function Players() {
 
         setForm({
             first_name: player.first_name || "",
+            nickname: player.nickname || "",
             last_name: player.last_name || "",
             club_id: player.club_id || "",
             date_registered: player.date_registered || "",
@@ -257,6 +261,9 @@ function Players() {
 
             first_name:
                 form.first_name.trim(),
+
+            nickname:
+                form.nickname.trim() || null,
 
             last_name:
                 form.last_name.trim(),
@@ -345,6 +352,7 @@ function Players() {
 
         const fullName = `
             ${player.first_name || ""}
+            ${player.nickname || ""}
             ${player.last_name || ""}
         `.trim().toLowerCase();
 
@@ -487,6 +495,26 @@ function Players() {
                                         value={form.first_name}
                                         onChange={handleChange}
                                         required
+                                    />
+
+                                </div>
+
+
+                                {/* Nickname */}
+
+                                <div className="col-md-6">
+
+                                    <label className="form-label">
+                                        Nickname <span className="text-muted">(optional)</span>
+                                    </label>
+
+                                    <input
+                                        type="text"
+                                        name="nickname"
+                                        className="form-control"
+                                        value={form.nickname}
+                                        onChange={handleChange}
+                                        placeholder="e.g. Albert"
                                     />
 
                                 </div>
@@ -808,8 +836,13 @@ function Players() {
                                             <td>
 
                                                 <strong>
-                                                    {player.first_name}{" "}
+                                                    {player.nickname || player.first_name}{" "}
                                                     {player.last_name}
+                                                    {player.nickname && (
+                                                        <div className="small text-muted fw-normal">
+                                                            Legal name: {player.first_name} {player.last_name}
+                                                        </div>
+                                                    )}
                                                 </strong>
 
                                             </td>

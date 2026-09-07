@@ -678,7 +678,7 @@ function Dashboard() {
 
                         <div className="col-md-4">
                             <Link
-                                to="/quick-tournament"
+                                to="/quick-score"
                                 className="card border-0 shadow-sm h-100 text-decoration-none text-dark"
                             >
                                 <div className="card-body">

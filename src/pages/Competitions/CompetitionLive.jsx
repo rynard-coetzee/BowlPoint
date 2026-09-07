@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabaseClient";
-
-function teamLabel(team) {
-    if (!team) return "TBD";
-    return team.team_name || `Team ${team.team_number}`;
-}
+import { getPlayerDisplayName } from "../../utils/playerDisplay";
 
 function calculateStandings(section, matches, scoring) {
     const winPoints = Number(scoring?.win ?? 2);
@@ -109,7 +105,32 @@ function CompetitionLive() {
         const [teamsResult, roundsResult, sectionsResult, matchesResult] = await Promise.all([
             supabase
                 .from("competition_teams")
-                .select("id, competition_id, club_id, team_number, team_name, status")
+                .select(`
+                    id,
+                    competition_id,
+                    club_id,
+                    team_number,
+                    team_name,
+                    status,
+                    clubs (
+                        id,
+                        name,
+                        short_name
+                    ),
+                    competition_team_players (
+                        id,
+                        player_id,
+                        position,
+                        position_order,
+                        players (
+                            id,
+                            first_name,
+                            nickname,
+                            last_name,
+                            display_name
+                        )
+                    )
+                `)
                 .eq("competition_id", competitionId)
                 .order("team_number"),
             supabase
@@ -228,6 +249,63 @@ function CompetitionLive() {
             supabase.removeChannel(channel);
         };
     }, [competition?.id, loadData]);
+
+    const playerName = (player) => {
+        return getPlayerDisplayName(player);
+    };
+
+    const getTeamPlayerNames = (team) => {
+        return (team?.competition_team_players || [])
+            .slice()
+            .sort((a, b) => (a.position_order || 0) - (b.position_order || 0))
+            .map(item => playerName(item.players))
+            .filter(Boolean);
+    };
+
+    const getTeamBaseName = (team) => {
+        if (!team) return "TBD";
+
+        const explicitName = team.team_name?.trim();
+        if (explicitName) return explicitName;
+
+        const clubCode =
+            team.clubs?.short_name?.trim() ||
+            team.club_short_name?.trim() ||
+            team.clubs?.name?.trim() ||
+            "TEAM";
+
+        const clubTeams = teams
+            .filter(item => item?.club_id && team.club_id && item.club_id === team.club_id)
+            .slice()
+            .sort((a, b) => {
+                const numberA = a.team_number || 0;
+                const numberB = b.team_number || 0;
+                if (numberA !== numberB) return numberA - numberB;
+                return String(a.id || "").localeCompare(String(b.id || ""));
+            });
+
+        const sequenceIndex = clubTeams.findIndex(item => item.id === team.id);
+        const sequenceNumber = sequenceIndex >= 0 ? sequenceIndex + 1 : (team.team_number || 1);
+
+        return `${clubCode}${sequenceNumber}`;
+    };
+
+    const TeamDisplay = ({ team, className = "" }) => {
+        if (!team) return <span className={className}>TBD</span>;
+
+        const playerNames = getTeamPlayerNames(team);
+
+        return (
+            <span className={className}>
+                <strong>{getTeamBaseName(team)}</strong>
+                {playerNames.length > 0 && (
+                    <span className="d-block small text-muted fw-normal mt-1">
+                        ({playerNames.join(", ")})
+                    </span>
+                )}
+            </span>
+        );
+    };
 
     const sectionalRoundNumber = useMemo(() => {
         const numbers = matches
@@ -385,7 +463,7 @@ function CompetitionLive() {
                                                             <tr key={row.team.id} className={index === 0 && complete ? "table-success" : ""}>
                                                                 <td className="fw-semibold">{index + 1}</td>
                                                                 <td>
-                                                                    <div className="fw-semibold">{teamLabel(row.team)}</div>
+                                                                    <div className="fw-semibold"><TeamDisplay team={row.team} /></div>
                                                                 </td>
                                                                 <td className="text-center">{row.played}</td>
                                                                 <td className="text-center fw-bold">{row.points}</td>
@@ -441,9 +519,9 @@ function CompetitionLive() {
                                                         <tr key={match.id}>
                                                             <td className="small">{match.round?.round_name || `Round ${match.round?.round_number || ""}`}</td>
                                                             <td className="small">#{match.match_number}</td>
-                                                            <td className="text-end fw-semibold">{teamLabel(match.teamA)}</td>
+                                                            <td className="text-end fw-semibold"><TeamDisplay team={match.teamA} /></td>
                                                             <td className="text-center fw-bold">{match.completed ? `${match.score_a} — ${match.score_b}` : "vs"}</td>
-                                                            <td className="fw-semibold">{teamLabel(match.teamB)}</td>
+                                                            <td className="fw-semibold"><TeamDisplay team={match.teamB} /></td>
                                                             <td className="text-end">
                                                                 <span className={`badge ${match.completed ? "bg-success" : match.team_a_id && match.team_b_id ? "bg-primary" : "bg-secondary"}`}>
                                                                     {match.completed ? "Final" : match.team_a_id && match.team_b_id ? "Scheduled" : "TBD"}
@@ -475,9 +553,9 @@ function CompetitionLive() {
                                         {recentResults.map(match => (
                                             <div className="list-group-item px-3 px-md-4" key={match.id}>
                                                 <div className="row align-items-center g-2">
-                                                    <div className="col-5 text-end fw-semibold">{teamLabel(match.teamA)}</div>
+                                                    <div className="col-5 text-end fw-semibold"><TeamDisplay team={match.teamA} /></div>
                                                     <div className="col-2 text-center"><span className="badge bg-dark fs-6">{match.score_a} — {match.score_b}</span></div>
-                                                    <div className="col-5 fw-semibold">{teamLabel(match.teamB)}</div>
+                                                    <div className="col-5 fw-semibold"><TeamDisplay team={match.teamB} /></div>
                                                 </div>
                                                 <div className="small text-muted text-center mt-1">{match.round?.round_name || `Round ${match.round?.round_number || ""}`}</div>
                                             </div>
@@ -522,11 +600,11 @@ function CompetitionLive() {
                                             ) : round.matches.map(match => (
                                                 <div className="border rounded p-2 mb-2" key={match.id}>
                                                     <div className="d-flex justify-content-between gap-2">
-                                                        <span>{teamLabel(match.teamA)}</span>
+                                                        <span><TeamDisplay team={match.teamA} /></span>
                                                         <strong>{match.completed ? match.score_a : ""}</strong>
                                                     </div>
                                                     <div className="d-flex justify-content-between gap-2 mt-1">
-                                                        <span>{teamLabel(match.teamB)}</span>
+                                                        <span><TeamDisplay team={match.teamB} /></span>
                                                         <strong>{match.completed ? match.score_b : ""}</strong>
                                                     </div>
                                                     <div className="small text-muted mt-1">

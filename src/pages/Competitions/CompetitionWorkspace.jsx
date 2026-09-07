@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabaseClient";
+import { getPlayerDisplayName } from "../../utils/playerDisplay";
 import { generateCompetitionDrawProposal } from "./competitionDrawEngine";
 import { buildCompetitionScheduleProposal } from "./competitionScheduleEngine";
+import CompetitionLiveCard from "./CompetitionLiveCard";
 
 function CompetitionWorkspace() {
     const { competitionId } = useParams();
@@ -224,6 +226,7 @@ function CompetitionWorkspace() {
             .select(`
                 id,
                 first_name,
+                nickname,
                 last_name,
                 display_name,
                 club_id,
@@ -270,6 +273,7 @@ function CompetitionWorkspace() {
                     players (
                         id,
                         first_name,
+                        nickname,
                         last_name,
                         display_name
                     )
@@ -2015,7 +2019,8 @@ function CompetitionWorkspace() {
             .filter(team => team.status === "active")
             .map(team => ({
                 id: team.id,
-                name: team.team_name || `Team ${team.team_number}`,
+                name: getTeamBaseName(team),
+                playerNames: getTeamPlayerNames(team),
                 clubId: team.club_id || null,
                 clubName: team.clubs?.name || team.clubs?.short_name || null
             }));
@@ -2378,35 +2383,101 @@ function CompetitionWorkspace() {
             return "—";
         }
 
-        if (player.display_name) {
-            return player.display_name;
-        }
-
-        return `${player.first_name || ""} ${player.last_name || ""}`.trim();
+        return getPlayerDisplayName(player) || "—";
     };
 
     /*
-     * Display a competition team using its explicit team name when supplied.
-     * When no team name was entered, use the player's name for singles and
-     * the Skip's name for pairs/trips/fours. This keeps draws, fixtures and
-     * standings useful instead of displaying generic Team 1/Team 2 labels.
+     * Return the players belonging to a competition team in their configured
+     * position order.
      */
-    const getTeamDisplayName = (team) => {
+    const getTeamPlayerNames = (team) => {
+        if (!team) return [];
+
+        return (team.competition_team_players || [])
+            .slice()
+            .sort((a, b) => (a.position_order || 0) - (b.position_order || 0))
+            .map(item => playerName(item.players))
+            .filter(name => name && name !== "—");
+    };
+
+    /*
+     * Generate the automatic competition team name.
+     *
+     * If the secretary leaves Team Name blank, the name becomes the club
+     * short code followed by that club's sequence number, e.g. HBC1, HBC2.
+     * The sequence is based on the team's order within that club, not the
+     * overall competition team number.
+     */
+    const getTeamBaseName = (team, allTeams = teams) => {
         if (!team) return "TBD";
 
         const explicitName = team.team_name?.trim();
         if (explicitName) return explicitName;
 
-        const teamPlayers = team.competition_team_players || [];
-        const skipPlayer = teamPlayers.find(item => item.position === "skip")?.players;
-        const fallbackPlayer = teamPlayers.find(item => item.position === "player")?.players
-            || teamPlayers[0]?.players;
-        const derivedPlayer = skipPlayer || fallbackPlayer;
+        const clubCode =
+            team.clubs?.short_name?.trim() ||
+            team.club_short_name?.trim() ||
+            team.clubs?.name?.trim() ||
+            team.clubName?.trim() ||
+            "TEAM";
 
-        const derivedName = playerName(derivedPlayer);
-        return derivedName && derivedName !== "—"
-            ? derivedName
-            : `Team ${team.team_number}`;
+        const clubTeams = (allTeams || [])
+            .filter(item => item?.club_id && team.club_id && item.club_id === team.club_id)
+            .slice()
+            .sort((a, b) => {
+                const numberA = a.team_number || 0;
+                const numberB = b.team_number || 0;
+                if (numberA !== numberB) return numberA - numberB;
+                return String(a.id || "").localeCompare(String(b.id || ""));
+            });
+
+        const sequenceIndex = clubTeams.findIndex(item => item.id === team.id);
+        const sequenceNumber = sequenceIndex >= 0
+            ? sequenceIndex + 1
+            : clubTeams.length + 1;
+
+        // If a club has no short code, use its name as a last resort.
+        // This keeps the generated name useful without requiring database
+        // changes for clubs that pre-date the short-code field.
+        const fallbackCode = clubCode === "TEAM"
+            ? (team.team_number ? "TEAM" : "TEAM")
+            : clubCode;
+
+        return `${fallbackCode}${sequenceNumber}`;
+    };
+
+    /*
+     * Plain-text team name used where a string is required by the draw/result
+     * logic. Visual team labels should use TeamDisplay below so player names
+     * can be rendered in a smaller font.
+     */
+    const getTeamDisplayName = (team) => {
+        return getTeamBaseName(team);
+    };
+
+    /*
+     * Consistent visual team label: generated/custom team name in the normal
+     * font, followed by all players in a smaller muted font.
+     */
+    const TeamDisplay = ({ team, className = "" }) => {
+        if (!team) return <span className={className}>TBD</span>;
+
+        const sourceTeam = teams.find(item => item.id === team.id) || team;
+        const baseName = getTeamBaseName(sourceTeam, teams);
+        const playerNames = getTeamPlayerNames(sourceTeam).length
+            ? getTeamPlayerNames(sourceTeam)
+            : (team.playerNames || []);
+
+        return (
+            <span className={className}>
+                <strong>{baseName}</strong>
+                {playerNames.length > 0 && (
+                    <span className="d-block small text-muted fw-normal mt-1">
+                        ({playerNames.join(", ")})
+                    </span>
+                )}
+            </span>
+        );
     };
 
     /*
@@ -3414,12 +3485,10 @@ function CompetitionWorkspace() {
 
                                             <td>
 
-                                                <strong>
-                                                    {getTeamDisplayName(team)}
-                                                </strong>
+                                                <TeamDisplay team={team} />
 
                                                 {team.team_name && (
-                                                    <div className="small text-muted">
+                                                    <div className="small text-muted mt-1">
                                                         Team {team.team_number}
                                                     </div>
                                                 )}
@@ -3582,15 +3651,15 @@ function CompetitionWorkspace() {
                                         const roundNumbers=[...new Set((section.matches||[]).map(m=>m.round?.round_number).filter(Boolean))].sort((a,b)=>a-b);
                                         return <div className="border rounded p-3 mb-3" key={section.id}>
                                             <div className="d-flex justify-content-between align-items-center mb-3"><strong>{section.section_name}</strong><span className="badge bg-secondary">{section.teams.length} teams</span></div>
-                                            <div className="row g-2 mb-3">{section.teams.map(team=><div className="col-md-6" key={team.id}><div className="small border rounded px-2 py-1 bg-light"><strong>{getTeamDisplayName(team)}</strong>{team.clubs?.name && <span className="text-muted"> — {team.clubs.name}</span>}</div></div>)}</div>
-                                            {roundNumbers.map(n=><div className="mb-3" key={n}><div className="fw-semibold small mb-2">Sectional Round {n}</div><div className="table-responsive"><table className="table table-sm table-bordered mb-0"><tbody>{section.matches.filter(m=>m.round?.round_number===n).sort((a,b)=>a.match_number-b.match_number).map(m=><tr key={m.id}><td>{m.teamA ? getTeamDisplayName(m.teamA) : "TBC"}</td><td className="text-center fw-semibold">vs</td><td>{m.teamB ? getTeamDisplayName(m.teamB) : "TBC"}</td></tr>)}</tbody></table></div></div>)}
+                                            <div className="row g-2 mb-3">{section.teams.map(team=><div className="col-md-6" key={team.id}><div className="small border rounded px-2 py-1 bg-light"><TeamDisplay team={team} />{team.clubs?.name && <span className="text-muted"> — {team.clubs.name}</span>}</div></div>)}</div>
+                                            {roundNumbers.map(n=><div className="mb-3" key={n}><div className="fw-semibold small mb-2">Sectional Round {n}</div><div className="table-responsive"><table className="table table-sm table-bordered mb-0"><tbody>{section.matches.filter(m=>m.round?.round_number===n).sort((a,b)=>a.match_number-b.match_number).map(m=><tr key={m.id}><td>{m.teamA ? <TeamDisplay team={m.teamA} /> : "TBC"}</td><td className="text-center fw-semibold">vs</td><td>{m.teamB ? <TeamDisplay team={m.teamB} /> : "TBC"}</td></tr>)}</tbody></table></div></div>)}
                                         </div>;
                                     })}
                                 </div></div>
                             </div>
                             <div className="col-lg-4">
                                 <div className="card border mb-3"><div className="card-header bg-white"><strong>Rounds</strong></div><div className="card-body">{confirmedDraw.rounds.map(round=><div className="d-flex justify-content-between align-items-center border-bottom py-2" key={round.id}><strong>{round.round_number}. {round.round_name}</strong><span className="badge bg-light text-dark border">{confirmedDraw.matches.filter(m=>m.round_id===round.id).length} matches</span></div>)}</div></div>
-                                <div className="card border"><div className="card-header bg-white"><strong>Playoff Path</strong></div><div className="card-body">{confirmedDraw.rounds.filter(r=>r.round_number>3).map(round=><div className="mb-3" key={round.id}><div className="fw-semibold mb-2">{round.round_name}</div>{confirmedDraw.matches.filter(m=>m.round_id===round.id).sort((a,b)=>a.match_number-b.match_number).map(m=><div className="small border rounded p-2 mb-2" key={m.id}><div>{m.teamA ? getTeamDisplayName(m.teamA) : "Winner of previous stage"}</div><div className="text-muted text-center">vs</div><div>{m.teamB ? getTeamDisplayName(m.teamB) : "Winner of previous stage"}</div></div>)}</div>)}</div></div>
+                                <div className="card border"><div className="card-header bg-white"><strong>Playoff Path</strong></div><div className="card-body">{confirmedDraw.rounds.filter(r=>r.round_number>3).map(round=><div className="mb-3" key={round.id}><div className="fw-semibold mb-2">{round.round_name}</div>{confirmedDraw.matches.filter(m=>m.round_id===round.id).sort((a,b)=>a.match_number-b.match_number).map(m=><div className="small border rounded p-2 mb-2" key={m.id}><div>{m.teamA ? <TeamDisplay team={m.teamA} /> : "Winner of previous stage"}</div><div className="text-muted text-center">vs</div><div>{m.teamB ? <TeamDisplay team={m.teamB} /> : "Winner of previous stage"}</div></div>)}</div>)}</div></div>
                             </div>
                         </div>
                     </div>
@@ -3887,7 +3956,7 @@ function CompetitionWorkspace() {
                                                             {section.teams.map(team => (
                                                                 <div className="col-md-6" key={team.id}>
                                                                     <div className="small border rounded px-2 py-1 bg-light">
-                                                                        <strong>{team.name}</strong>
+                                                                        <TeamDisplay team={team} />
                                                                         {team.clubName && (
                                                                             <span className="text-muted"> — {team.clubName}</span>
                                                                         )}
@@ -4401,7 +4470,7 @@ function CompetitionWorkspace() {
                                                                     </div>
                                                                     <div className="d-flex align-items-center gap-2">
                                                                         {winner ? (
-                                                                            <span className="badge bg-success">Winner: {getTeamDisplayName(winner.team)}</span>
+                                                                            <span className="badge bg-success">Winner: <TeamDisplay team={winner.team} /></span>
                                                                         ) : (
                                                                             <span className="badge bg-secondary">{completedGames}/{sectionMatches.length} games complete</span>
                                                                         )}
@@ -4523,7 +4592,7 @@ function CompetitionWorkspace() {
                                                                 <div className="card-header bg-white d-flex justify-content-between align-items-center">
                                                                     <strong>{section.section_name}</strong>
                                                                     {winner ? (
-                                                                        <span className="badge bg-success">Winner: {getTeamDisplayName(winner.team)}</span>
+                                                                        <span className="badge bg-success">Winner: <TeamDisplay team={winner.team} /></span>
                                                                     ) : (
                                                                         <span className="badge bg-secondary">In progress</span>
                                                                     )}
@@ -4549,7 +4618,7 @@ function CompetitionWorkspace() {
                                                                             {standings.map((row, index) => (
                                                                                 <tr key={row.teamId} className={winner?.teamId === row.teamId ? "table-success" : ""}>
                                                                                     <td>{index + 1}</td>
-                                                                                    <td className="fw-semibold">{getTeamDisplayName(row.team)}</td>
+                                                                                    <td className="fw-semibold"><TeamDisplay team={row.team} /></td>
                                                                                     <td className="text-center">{row.played}</td>
                                                                                     <td className="text-center">{row.wins}</td>
                                                                                     <td className="text-center">{row.draws}</td>
@@ -4664,21 +4733,20 @@ function CompetitionWorkspace() {
 
             </div>
 
+            <div className="row g-4 mb-4 align-items-stretch">
 
-            <div className="row g-3">
-
-                <div className="col-md-6">
+                <div className="col-lg-6">
 
                     <div className="card shadow-sm border-0 h-100">
 
-                        <div className="card-body">
+                        <div className="card-body p-4">
 
-                            <h5>
+                            <h5 className="mb-2">
                                 <i className="bi bi-bar-chart me-2"></i>
                                 Results & Live Scoring
                             </h5>
 
-                            <p className="text-muted">
+                            <p className="text-muted mb-3">
                                 Capture results and provide live competition standings.
                             </p>
 
@@ -4689,6 +4757,14 @@ function CompetitionWorkspace() {
                         </div>
 
                     </div>
+
+                </div>
+
+                <div className="col-lg-6">
+
+                    <CompetitionLiveCard
+                        competition={competition}
+                    />
 
                 </div>
 

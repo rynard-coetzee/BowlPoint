@@ -157,7 +157,7 @@ function TournamentList() {
     ) => {
 
         navigate(
-            `/quick-tournament/${tournament.id}`
+            `/quick-score/${tournament.id}`
         );
 
     };
@@ -166,7 +166,7 @@ function TournamentList() {
     const handleNewTournament = () => {
 
         navigate(
-            "/quick-tournament/new"
+            "/quick-score/new"
         );
 
     };

@@ -42,6 +42,7 @@ function TournamentSetup({
                         <TournamentDetails
                             tournament={tournament}
                             updateTournament={updateTournament}
+                            updateScoring={updateScoring}
                         />
 
                     </SectionPanel>

@@ -19,6 +19,11 @@ import SupabaseTest from "./pages/Settings/SupabaseTest";
 import LiveTournament from "./pages/LiveTournament/LiveTournament";
 import CompetitionLive from "./pages/Competitions/CompetitionLive";
 import CompetitionWorkspace from "./pages/Competitions/CompetitionWorkspace";
+import Login from "./pages/Auth/Login";
+import ForgotPassword from "./pages/Auth/ForgotPassword";
+import ResetPassword from "./pages/Auth/ResetPassword";
+import Users from "./pages/Users/Users";
+import ProtectedRoute from "./components/auth/ProtectedRoute";
 
 
 const router = createBrowserRouter([
@@ -46,6 +51,10 @@ const router = createBrowserRouter([
     },
 
 
+    { path: "/login", element: <Login /> },
+    { path: "/forgot-password", element: <ForgotPassword /> },
+    { path: "/reset-password", element: <ResetPassword /> },
+
     /*
      * Main BowlPoint application
      */
@@ -54,6 +63,7 @@ const router = createBrowserRouter([
         element: <AppLayout />,
 
         children: [
+            { element: <ProtectedRoute />, children: [
 
             {
                 index: true,
@@ -62,46 +72,55 @@ const router = createBrowserRouter([
 
 
             /*
-             * Tournament Manager
+             * Quick Score
              *
-             * /quick-tournament
-             *      = tournament list
+             * /quick-score
+             *      = active/completed tournament list
              *
-             * /quick-tournament/new
-             *      = create a new tournament
+             * /quick-score/new
+             *      = create a new Quick Score tournament
              *
-             * /quick-tournament/:tournamentId
-             *      = open an existing tournament
+             * /quick-score/:tournamentId
+             *      = open an existing Quick Score tournament
+             *
+             * All authenticated roles can use Quick Score. Ownership
+             * is enforced by the tournament service/database policies.
              */
 
             {
                 path: "/quick-score",
-                element: <QuickScore />
+                element: <TournamentList />
             },
 
+            {
+                path: "quick-score/new",
+                element: <QuickTournament />
+            },
+
+            {
+                path: "quick-score/:tournamentId",
+                element: <QuickTournament />
+            },
+
+            /*
+             * Legacy Quick Tournament URLs.
+             * Keep these working for existing bookmarks/links, but make
+             * them available to all authenticated Quick Score users.
+             */
             {
                 path: "quick-tournament",
                 element: <TournamentList />
             },
 
-
-            /*
-             * IMPORTANT:
-             *
-             * Keep /new before :tournamentId so
-             * "new" is not interpreted as a tournament ID.
-             */
             {
                 path: "quick-tournament/new",
                 element: <QuickTournament />
             },
 
-
             {
                 path: "quick-tournament/:tournamentId",
                 element: <QuickTournament />
             },
-
 
             {
                 path: "competitions",
@@ -111,7 +130,8 @@ const router = createBrowserRouter([
 
             {
                 path: "clubs",
-                element: <Clubs />
+                element: <ProtectedRoute roles={["admin", "comp_secretary"]} />,
+                children: [{ index: true, element: <Clubs /> }]
             },
 
 
@@ -130,13 +150,15 @@ const router = createBrowserRouter([
 
             {
                 path: "players",
-                element: <Players />
+                element: <ProtectedRoute roles={["admin", "comp_secretary"]} />,
+                children: [{ index: true, element: <Players /> }]
             },
 
 
             {
                 path: "teams",
-                element: <Teams />
+                element: <ProtectedRoute roles={["admin", "comp_secretary"]} />,
+                children: [{ index: true, element: <Teams /> }]
             },
 
 
@@ -147,8 +169,16 @@ const router = createBrowserRouter([
 
 
             {
+                path: "users",
+                element: <ProtectedRoute roles={["admin", "comp_secretary"]} />,
+                children: [{ index: true, element: <Users /> }]
+            },
+
+
+            {
                 path: "settings",
-                element: <Settings />
+                element: <ProtectedRoute roles={["admin", "comp_secretary"]} />,
+                children: [{ index: true, element: <Settings /> }]
             },
 
 
@@ -157,6 +187,7 @@ const router = createBrowserRouter([
                 element: <SupabaseTest />
             }
 
+            ] }
         ]
 
     }

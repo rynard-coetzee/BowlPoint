@@ -1,8 +1,16 @@
 import "./Sidebar.css";
 import navigation from "../../config/navigation";
 import { NavLink } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext";
 
 function Sidebar() {
+    const { profile, signOut } = useAuth();
+
+    const canSee = (item) => {
+        if (!item.roles) return true;
+        return item.roles.includes(profile?.role);
+    };
+
     return (
         <aside className="sidebar">
 
@@ -18,7 +26,7 @@ function Sidebar() {
 
             <ul>
 
-                {navigation.map((item) => (
+                {navigation.filter(canSee).map((item) => (
 
                     <li key={item.path}>
 
@@ -40,6 +48,14 @@ function Sidebar() {
                 ))}
 
             </ul>
+
+            {profile && (
+                <div className="sidebar-user">
+                    <div className="sidebar-user-name">{profile.full_name || "BowlPoint User"}</div>
+                    <div className="sidebar-user-role">{profile.role === "comp_secretary" ? "Comp Secretary" : profile.role === "admin" ? "Admin" : "User"}</div>
+                    <button type="button" className="sidebar-signout" onClick={signOut}>Sign out</button>
+                </div>
+            )}
 
         </aside>
     );

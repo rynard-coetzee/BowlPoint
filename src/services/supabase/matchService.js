@@ -31,6 +31,36 @@ export async function createRound({
 }
 
 
+
+
+/*
+ * Update a round status.
+ */
+export async function updateRoundStatus({
+
+    roundId,
+    status
+
+}) {
+
+    const { data, error } = await supabase
+        .from("rounds")
+        .update({
+            status,
+            updated_at: new Date().toISOString()
+        })
+        .eq("id", roundId)
+        .select()
+        .single();
+
+    if (error) {
+        throw error;
+    }
+
+    return data;
+
+}
+
 /*
  * Create a match.
  */

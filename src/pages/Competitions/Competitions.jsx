@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../../lib/supabaseClient";
+import { useAuth } from "../../context/AuthContext";
 
 function Competitions() {
+
+    const { isAdmin } = useAuth();
 
     const [competitions, setCompetitions] = useState([]);
 
@@ -395,6 +398,69 @@ function Competitions() {
 
             alert(
                 `Unable to save competition.\n\n${error.message}`
+            );
+
+        } finally {
+
+            setSaving(false);
+
+        }
+
+    };
+
+
+    /*
+     * Delete competition.
+     *
+     * The UI restricts this action to administrators. Supabase RLS
+     * must also enforce the same rule so the API cannot be used to
+     * bypass the UI.
+     */
+    const handleDeleteCompetition = async (competition) => {
+
+        if (!isAdmin) {
+            return;
+        }
+
+        const confirmed = window.confirm(
+            `Delete competition "${competition.name}"?\n\n` +
+            "This will permanently delete the competition and its " +
+            "associated teams, draw, schedule, results and scoring data.\n\n" +
+            "This action cannot be undone."
+        );
+
+        if (!confirmed) {
+            return;
+        }
+
+        setSaving(true);
+
+        try {
+
+            const { error } = await supabase.rpc(
+                "delete_competition",
+                {
+                    p_competition_id: competition.id
+                }
+            );
+
+            if (error) {
+                throw error;
+            }
+
+            setCompetitions(prev =>
+                prev.filter(item => item.id !== competition.id)
+            );
+
+        } catch (error) {
+
+            console.error(
+                "Error deleting competition:",
+                error
+            );
+
+            alert(
+                `Unable to delete competition.\n\n${error.message}`
             );
 
         } finally {
@@ -1160,6 +1226,25 @@ function Competitions() {
                                                             <i className="bi bi-pencil me-1"></i>
                                                             Edit
                                                         </button>
+
+                                                        {isAdmin && (
+
+                                                            <button
+                                                                type="button"
+                                                                className="btn btn-sm btn-outline-danger"
+                                                                onClick={() =>
+                                                                    handleDeleteCompetition(
+                                                                        competition
+                                                                    )
+                                                                }
+                                                                disabled={saving}
+                                                                title="Delete competition"
+                                                            >
+                                                                <i className="bi bi-trash me-1"></i>
+                                                                Delete
+                                                            </button>
+
+                                                        )}
 
                                                     </div>
 

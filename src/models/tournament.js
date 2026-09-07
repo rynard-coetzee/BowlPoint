@@ -16,6 +16,8 @@ export function createTournament() {
 
             win: 2,
 
+            drawMode: "standard",
+
             skins: {
 
                 enabled: false,

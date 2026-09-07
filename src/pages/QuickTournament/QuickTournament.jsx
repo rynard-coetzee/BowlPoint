@@ -1,5 +1,6 @@
 import {
     useEffect,
+    useRef,
     useState
 } from "react";
 
@@ -17,7 +18,12 @@ import { loadTournament } from "../../services/supabase/tournamentLoader";
 import { createTournament } from "../../models/tournament";
 import { createTeam } from "../../models/team";
 
-import { generateRoundRobinDraw } from "../../lib/drawEngine";
+import {
+    generateRoundRobinDraw,
+    generateStrengthDraw,
+    generateNextStrengthRound,
+    isRoundComplete
+} from "../../lib/drawEngine";
 
 import {
     updateMatchInTournament,
@@ -37,7 +43,9 @@ import {
  */
 
 import {
-    createTournament as createSupabaseTournament
+    createTournament as createSupabaseTournament,
+    updateTournament as updateTournamentInDatabase,
+    endQuickScoreTournament
 } from "../../services/supabase/tournamentService";
 
 import {
@@ -47,6 +55,7 @@ import {
 import {
     createRound,
     createMatch,
+    updateRoundStatus,
     updateMatchTeams,
     updateMatchScore as updateSupabaseMatchScore
 } from "../../services/supabase/matchService";
@@ -114,6 +123,18 @@ function QuickTournament() {
      */
     const [saving, setSaving] =
         useState(false);
+
+
+    /*
+     * Prevent duplicate End Tournament operations.
+     */
+    const [endingTournament, setEndingTournament] =
+        useState(false);
+
+    /* Prevent duplicate next-round generation if two score saves finish
+     * at nearly the same time. */
+    const strengthRoundGenerationLock =
+        useRef(false);
 
 
     /*
@@ -296,6 +317,13 @@ function QuickTournament() {
 
                     break;
 
+                case "strengthDraw":
+
+                    scoring.drawMode =
+                        value ? "strength" : "standard";
+
+                    break;
+
 
                 default:
                     break;
@@ -382,8 +410,8 @@ function QuickTournament() {
      * 1. Generates the local draw
      * 2. Creates the tournament in Supabase
      * 3. Creates the teams
-     * 4. Creates all rounds
-     * 5. Creates all matches
+     * 4. Creates Round 1 (Strength mode) or all rounds (standard mode)
+     * 5. Creates the matches for the rounds that currently exist
      * 6. Stores the Supabase match IDs
      */
     const generateTournament = async () => {
@@ -403,9 +431,9 @@ function QuickTournament() {
              * round-robin draw.
              */
             const generatedTournament =
-                generateRoundRobinDraw(
-                    tournament
-                );
+                tournament.scoring.drawMode === "strength"
+                    ? generateStrengthDraw(tournament)
+                    : generateRoundRobinDraw(tournament);
 
 
             /*
@@ -418,9 +446,7 @@ function QuickTournament() {
                         generatedTournament.name,
 
                     totalRounds:
-                        generatedTournament
-                            .rounds
-                            .length,
+                        generatedTournament.totalRounds,
 
                     scoring:
                         generatedTournament.scoring,
@@ -515,136 +541,69 @@ function QuickTournament() {
 
 
             /*
-             * Create rounds and matches.
+             * Create the rounds and matches.
+             *
+             * Standard draws create all requested rounds. Strength draws
+             * create Round 1 only; later rounds are created after the
+             * preceding round has been fully scored.
              */
             const databaseRounds = [];
 
-
             for (
                 let roundIndex = 0;
-                roundIndex <
-                generatedTournament
-                    .rounds
-                    .length;
+                roundIndex < generatedTournament.rounds.length;
                 roundIndex++
             ) {
 
                 const localRound =
-                    generatedTournament
-                        .rounds[
-                            roundIndex
-                        ];
-
-
-                /*
-                 * First round is active.
-                 * Remaining rounds are pending.
-                 */
-                const roundStatus =
-                    roundIndex === 0
-                        ? "in_progress"
-                        : "pending";
-
+                    generatedTournament.rounds[roundIndex];
 
                 const databaseRound =
                     await createRound({
-
-                        tournamentId:
-                            databaseTournament.id,
-
-                        roundNumber:
-                            localRound.number,
-
+                        tournamentId: databaseTournament.id,
+                        roundNumber: localRound.number,
                         status:
-                            roundStatus
-
+                            generatedTournament.scoring.drawMode === "strength"
+                                ? "in_progress"
+                                : roundIndex === 0
+                                    ? "in_progress"
+                                    : "pending"
                     });
 
+                databaseRounds.push(databaseRound);
 
-                databaseRounds.push(
-                    databaseRound
-                );
+                localRound.id = databaseRound.id;
 
-
-                /*
-                 * Create every match in
-                 * this round.
-                 */
                 for (
                     let matchIndex = 0;
-                    matchIndex <
-                    localRound
-                        .matches
-                        .length;
+                    matchIndex < localRound.matches.length;
                     matchIndex++
                 ) {
 
-                    const localMatch =
-                        localRound
-                            .matches[
-                                matchIndex
-                            ];
-
+                    const localMatch = localRound.matches[matchIndex];
 
                     const databaseTeamAId =
-                        teamIdMap.get(
-                            localMatch
-                                .teamA
-                                .id
-                        );
-
+                        teamIdMap.get(localMatch.teamA.id);
 
                     const databaseTeamBId =
-                        teamIdMap.get(
-                            localMatch
-                                .teamB
-                                .id
-                        );
+                        teamIdMap.get(localMatch.teamB.id);
 
-
-                    /*
-                     * Safety check.
-                     *
-                     * A synthetic BYE should never
-                     * become a database match.
-                     */
-                    if (
-                        !databaseTeamAId ||
-                        !databaseTeamBId
-                    ) {
+                    if (!databaseTeamAId || !databaseTeamBId) {
                         continue;
                     }
 
-
                     const databaseMatch =
                         await createMatch({
-
-                            roundId:
-                                databaseRound.id,
-
-                            matchNumber:
-                                matchIndex + 1,
-
-                            teamAId:
-                                databaseTeamAId,
-
-                            teamBId:
-                                databaseTeamBId
-
+                            roundId: databaseRound.id,
+                            matchNumber: matchIndex + 1,
+                            teamAId: databaseTeamAId,
+                            teamBId: databaseTeamBId
                         });
 
-
-                    /*
-                     * Attach the Supabase match ID
-                     * to the local match.
-                     */
-                    localMatch.supabaseMatchId =
-                        databaseMatch.id;
-
+                    localMatch.supabaseMatchId = databaseMatch.id;
                 }
 
             }
-
 
             /*
              * Store the database tournament ID
@@ -665,7 +624,9 @@ function QuickTournament() {
                     databaseTournament.id,
 
                 publicCode:
-                    databaseTournament.public_code
+                    databaseTournament.public_code,
+
+                currentRound: 1
 
             };
 
@@ -683,7 +644,7 @@ function QuickTournament() {
             * will reload this tournament from Supabase.
             */
             navigate(
-                `/quick-tournament/${databaseTournament.id}`,
+                `/quick-score/${databaseTournament.id}`,
                 {
                     replace: true
                 }
@@ -1102,6 +1063,58 @@ function QuickTournament() {
 
 
     /*
+     * Permanently end and remove the current Quick Score tournament.
+     *
+     * This is deliberately separate from normal tournament completion.
+     * A completed tournament remains available until the user explicitly
+     * chooses End Tournament.
+     */
+    const handleEndTournament = async () => {
+
+        if (!tournamentId || endingTournament) {
+            return;
+        }
+
+        const confirmed = window.confirm(
+            "End this tournament?\n\n" +
+            "This will permanently delete the Quick Score tournament, " +
+            "its fixtures, scores and temporary teams. This action cannot be undone."
+        );
+
+        if (!confirmed) {
+            return;
+        }
+
+        try {
+
+            setEndingTournament(true);
+
+            await endQuickScoreTournament(tournamentId);
+
+            navigate("/quick-score", { replace: true });
+
+        } catch (error) {
+
+            console.error(
+                "Failed to end tournament:",
+                error
+            );
+
+            alert(
+                "Unable to end the tournament.\n\n" +
+                error.message
+            );
+
+        } finally {
+
+            setEndingTournament(false);
+
+        }
+
+    };
+
+
+    /*
      * Save a match score.
      */
     const updateMatchScore = async (
@@ -1196,47 +1209,205 @@ function QuickTournament() {
          * Update the local tournament only
          * after Supabase has successfully saved.
          */
-        setTournament(prev =>
+        const updatedTournament =
             updateMatchInTournament(
-
-                prev,
-
+                tournament,
                 roundId,
-
                 matchId,
-
                 {
-
-                    scoreA:
-                        Number(scoreA),
-
-                    scoreB:
-                        Number(scoreB),
-
+                    scoreA: Number(scoreA),
+                    scoreB: Number(scoreB),
                     skinsA:
                         skinsA === ""
                             ? null
                             : Number(skinsA),
-
                     skinsB:
                         skinsB === ""
                             ? null
                             : Number(skinsB),
+                    completed: true,
+                    completedAt: new Date().toISOString()
+                }
+            );
 
-                    completed:
-                        true,
+        setTournament(updatedTournament);
 
-                    completedAt:
-                        new Date()
-                            .toISOString()
+        /*
+         * Strength mode advances only when every match in the current
+         * round has been scored. This is deliberately done after the
+         * score has been persisted and reflected in local state.
+         */
+        if (
+            updatedTournament.scoring.drawMode === "strength" &&
+            !strengthRoundGenerationLock.current
+        ) {
 
+            strengthRoundGenerationLock.current = true;
+
+            try {
+
+                const advancedTournament =
+                    await generateNextStrengthRoundInDatabase(
+                        updatedTournament
+                    );
+
+                if (advancedTournament !== updatedTournament) {
+                    setTournament(advancedTournament);
                 }
 
-            )
-        );
+            } catch (error) {
+
+                console.error(
+                    "Failed to generate the next Strength vs Strength round:",
+                    error
+                );
+
+                alert(
+                    "The score was saved, but the next round could not be generated.\n\n" +
+                    error.message
+                );
+
+            } finally {
+
+                strengthRoundGenerationLock.current = false;
+
+            }
+
+        }
 
     };
 
+
+    /*
+     * Generate the next Strength vs Strength round after the current
+     * round has been completely scored.
+     */
+    const generateNextStrengthRoundInDatabase = async (
+        completedTournament
+    ) => {
+
+        if (completedTournament.scoring.drawMode !== "strength") {
+            return completedTournament;
+        }
+
+        const completedRound =
+            completedTournament.rounds[
+                completedTournament.rounds.length - 1
+            ];
+
+        if (!isRoundComplete(completedRound)) {
+            return completedTournament;
+        }
+
+        if (completedTournament.rounds.length >= completedTournament.totalRounds) {
+
+            if (completedTournament.supabaseTournamentId) {
+                await updateTournamentInDatabase(
+                    completedTournament.supabaseTournamentId,
+                    {
+                        status: "completed",
+                        currentRound: completedRound.number
+                    }
+                );
+            }
+
+            return {
+                ...completedTournament,
+                status: "completed",
+                currentRound: completedRound.number
+            };
+
+        }
+
+        const currentStandings =
+            calculateStandings(completedTournament);
+
+        const nextRound =
+            generateNextStrengthRound(
+                completedTournament,
+                currentStandings
+            );
+
+        if (!nextRound) {
+            return completedTournament;
+        }
+
+        const tournamentId =
+            completedTournament.supabaseTournamentId;
+
+        if (!tournamentId) {
+            return {
+                ...completedTournament,
+                rounds: [...completedTournament.rounds, nextRound],
+                currentRound: nextRound.number
+            };
+        }
+
+        await updateRoundStatus({
+            roundId: completedRound.id,
+            status: "completed"
+        });
+
+        const databaseRound =
+            await createRound({
+                tournamentId,
+                roundNumber: nextRound.number,
+                status: "in_progress"
+            });
+
+        nextRound.id = databaseRound.id;
+
+        for (
+            let matchIndex = 0;
+            matchIndex < nextRound.matches.length;
+            matchIndex++
+        ) {
+
+            const localMatch = nextRound.matches[matchIndex];
+
+            const databaseTeamAId =
+                getSupabaseTeamId(
+                    completedTournament,
+                    localMatch.teamA.id
+                );
+
+            const databaseTeamBId =
+                getSupabaseTeamId(
+                    completedTournament,
+                    localMatch.teamB.id
+                );
+
+            if (!databaseTeamAId || !databaseTeamBId) {
+                continue;
+            }
+
+            const databaseMatch =
+                await createMatch({
+                    roundId: databaseRound.id,
+                    matchNumber: matchIndex + 1,
+                    teamAId: databaseTeamAId,
+                    teamBId: databaseTeamBId
+                });
+
+            localMatch.supabaseMatchId = databaseMatch.id;
+        }
+
+        await updateTournamentInDatabase(
+            tournamentId,
+            {
+                status: "in_progress",
+                currentRound: nextRound.number
+            }
+        );
+
+        return {
+            ...completedTournament,
+            rounds: [...completedTournament.rounds, nextRound],
+            status: "in_progress",
+            currentRound: nextRound.number
+        };
+
+    };
 
     /*
      * Calculate standings using the existing
@@ -1346,7 +1517,7 @@ function QuickTournament() {
                         className="btn btn-outline-danger"
                         onClick={() =>
                             window.location.href =
-                                "/quick-tournament"
+                                "/quick-score"
                         }
                     >
 
@@ -1515,6 +1686,60 @@ function QuickTournament() {
                 }
 
             />
+
+
+            {tournament.supabaseTournamentId && (
+
+                <div className="card shadow-sm border-danger mt-4">
+
+                    <div className="card-body d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+
+                        <div>
+
+                            <h5 className="text-danger mb-1">
+                                End Tournament
+                            </h5>
+
+                            <p className="text-muted mb-0">
+                                Permanently delete this Quick Score tournament and all of its scores and fixtures.
+                            </p>
+
+                        </div>
+
+                        <button
+                            type="button"
+                            className="btn btn-danger"
+                            onClick={handleEndTournament}
+                            disabled={endingTournament || saving}
+                        >
+
+                            {endingTournament ? (
+
+                                <>
+                                    <span
+                                        className="spinner-border spinner-border-sm me-2"
+                                        role="status"
+                                        aria-hidden="true"
+                                    ></span>
+                                    Ending Tournament...
+                                </>
+
+                            ) : (
+
+                                <>
+                                    <i className="bi bi-trash3 me-2"></i>
+                                    End Tournament
+                                </>
+
+                            )}
+
+                        </button>
+
+                    </div>
+
+                </div>
+
+            )}
 
 
             {saving && (

@@ -85,3 +85,8 @@
 .sidebar a.active-link i {
     color: #ffc107;
 }
+.sidebar-user { margin-top: 28px; padding: 14px; border-top: 1px solid rgba(255,255,255,.16); }
+.sidebar-user-name { font-weight: 700; }
+.sidebar-user-role { font-size: .82rem; opacity: .7; margin-top: 2px; text-transform: capitalize; }
+.sidebar-signout { margin-top: 12px; width: 100%; border: 1px solid rgba(255,255,255,.28); background: transparent; color: #fff; border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+.sidebar-signout:hover { background: rgba(255,255,255,.10); }

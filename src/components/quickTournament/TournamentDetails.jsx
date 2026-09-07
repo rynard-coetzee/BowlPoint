@@ -2,7 +2,8 @@ import SectionHeader from "../common/SectionHeader";
 
 function TournamentDetails({
     tournament,
-    updateTournament
+    updateTournament,
+    updateScoring
 }) {
 
     return (
@@ -85,6 +86,46 @@ function TournamentDetails({
                 </div>
 
             </div>
+
+            {tournament.totalRounds >= 2 && (
+
+                <div className="mt-4 p-3 border rounded bg-light">
+
+                    <div className="form-check form-switch">
+
+                        <input
+                            className="form-check-input"
+                            type="checkbox"
+                            id="strengthVsStrength"
+                            checked={
+                                tournament.scoring.drawMode === "strength"
+                            }
+                            onChange={(e) =>
+                                updateScoring(
+                                    "strengthDraw",
+                                    e.target.checked
+                                )
+                            }
+                        />
+
+                        <label
+                            className="form-check-label fw-semibold"
+                            htmlFor="strengthVsStrength"
+                        >
+                            Strength vs Strength Draw
+                        </label>
+
+                    </div>
+
+                    <small className="text-muted d-block mt-2">
+                        Round 1 is random. After each round is completed,
+                        the next round is generated from the standings while
+                        avoiding repeat opponents whenever possible.
+                    </small>
+
+                </div>
+
+            )}
 
         </>
     );

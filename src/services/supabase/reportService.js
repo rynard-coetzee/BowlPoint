@@ -65,7 +65,7 @@ export async function getCompetitionReportData(competitionId) {
     if (teams.length) {
         const { data, error } = await supabase
             .from("competition_team_players")
-            .select("id, competition_team_id, player_id, position, position_order, players (id, first_name, last_name, display_name)")
+            .select("id, competition_team_id, player_id, position, position_order, players (id, first_name, nickname, last_name, display_name)")
             .in("competition_team_id", teams.map(team => team.id));
 
         if (error) throw error;

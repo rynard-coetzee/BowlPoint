@@ -75,7 +75,7 @@ function CompetitionLiveCard({ competition }) {
     return (
         <div className="card shadow-sm border-0 h-100">
             <div className="card-body">
-                <div className="d-flex justify-content-between align-items-start gap-3 mb-3">
+                <div className="d-flex justify-content-between align-items-start gap-3 mb-4">
                     <div>
                         <h5 className="mb-1">
                             <i className="bi bi-phone me-2"></i>
@@ -88,14 +88,14 @@ function CompetitionLiveCard({ competition }) {
                     <span className="badge bg-success">Public</span>
                 </div>
 
-                <div className="row g-3 align-items-center">
+                <div className="row g-4 align-items-center">
                     <div className="col-sm-5 text-center">
                         <div className="border rounded bg-white p-2 d-inline-block">
                             <img
                                 src={qrUrl}
                                 alt="QR code for live competition results"
-                                width="180"
-                                height="180"
+                                width="160"
+                                height="160"
                                 style={{ display: "block" }}
                             />
                         </div>
