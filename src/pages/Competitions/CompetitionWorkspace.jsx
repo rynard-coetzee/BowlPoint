@@ -662,8 +662,6 @@ function CompetitionWorkspace() {
                 if (competitionType === "weekend") {
                     const expected = assignment.label.includes("Saturday") ? "Saturday" : "Sunday";
                     alert(`${assignment.label} must be scheduled on a ${expected}.`);
-                } else if (competitionType === "week") {
-                    alert(`${assignment.label} must be scheduled on a Monday–Friday date.`);
                 } else {
                     alert(`${assignment.label} must be scheduled on a weekday.`);
                 }
@@ -2797,7 +2795,8 @@ function CompetitionWorkspace() {
                         {["teams", "draw", "schedule", "scoring", "playoffs"].map((stage, index) => {
                             const info = workspaceStageInfo[stage];
                             const active = workspaceStage === stage;
-                            const completed = ["teams", "draw", "schedule", "scoring"].indexOf(stage) < ["teams", "draw", "schedule", "scoring"].indexOf(workspaceStage);
+                            const stageOrder = ["teams", "draw", "schedule", "scoring", "playoffs"];
+                            const completed = stageOrder.indexOf(stage) < stageOrder.indexOf(workspaceStage);
                             return (
                                 <div key={stage} className="d-flex align-items-center">
                                     {index > 0 && <i className="bi bi-chevron-right text-muted mx-1"></i>}
@@ -3751,11 +3750,9 @@ function CompetitionWorkspace() {
                                     }}
                                 >
 
-                                    <option value="midweek">Midweek – One Day</option>
+                                    <option value="weekend">Weekend Tournament</option>
 
-                                    <option value="week">Week</option>
-
-                                    <option value="weekend">Weekend</option>
+                                    <option value="midweek">Midweek Tournament</option>
 
                                 </select>
 
@@ -3897,9 +3894,7 @@ function CompetitionWorkspace() {
 
                                         {drawProposal.recommendedPlan.schedule.competitionType === "weekend"
                                             ? `${drawProposal.recommendedPlan.schedule.saturdaySectionalRounds} sectional round(s) Saturday + ${drawProposal.recommendedPlan.schedule.sundaySectionalRounds} sectional round(s) Sunday, followed by ${drawProposal.recommendedPlan.schedule.playoffRoundsOnSunday} playoff round(s) where required.`
-                                            : drawProposal.recommendedPlan.schedule.competitionType === "week"
-                                                ? `${drawProposal.recommendedPlan.totalRounds} round(s), scheduled at up to 3 rounds per weekday playing day.`
-                                                : `${drawProposal.recommendedPlan.totalRounds} playing day(s) required at one round per midweek playing day, potentially over multiple weeks.`}
+                                            : `${drawProposal.recommendedPlan.totalRounds} playing day(s) required at one round per day.`}
 
                                     </div>
 
@@ -4125,11 +4120,7 @@ function CompetitionWorkspace() {
                                 <div className="border rounded p-3 h-100">
                                     <div className="text-muted small">Tournament Type</div>
                                     <div className="fw-bold">
-                                        {scheduleProposal.competitionType === "weekend"
-                                            ? "Weekend"
-                                            : scheduleProposal.competitionType === "week"
-                                                ? "Week"
-                                                : "Midweek – One Day"}
+                                        {scheduleProposal.competitionType === "weekend" ? "Weekend" : "Midweek"}
                                     </div>
                                 </div>
                             </div>
@@ -4157,18 +4148,6 @@ function CompetitionWorkspace() {
                             <div className="alert alert-info">
                                 <strong>Weekend rule:</strong> maximum 3 rounds Saturday and 3 rounds Sunday.
                                 Playoffs are placed on Sunday only when the complete playoff stage fits into the remaining Sunday capacity; otherwise the playoffs move to the next available Saturday.
-                            </div>
-                        )}
-
-                        {scheduleProposal.competitionType === "week" && (
-                            <div className="alert alert-info">
-                                <strong>Week rule:</strong> playing days may be scheduled on any Monday–Friday date, with up to 3 rounds per playing day.
-                            </div>
-                        )}
-
-                        {scheduleProposal.competitionType === "midweek" && (
-                            <div className="alert alert-info">
-                                <strong>Midweek – One Day rule:</strong> 1 round per playing day. The competition may run over any number of midweek playing days.
                             </div>
                         )}
 
@@ -4242,9 +4221,7 @@ function CompetitionWorkspace() {
                                                 <div className="small text-muted mt-1">
                                                     {scheduleProposal.competitionType === "weekend"
                                                         ? (assignment.label.includes("Saturday") ? "Saturday required" : "Sunday required")
-                                                        : scheduleProposal.competitionType === "week"
-                                                            ? "Monday–Friday required"
-                                                            : "Weekday required"}
+                                                        : "Weekday required"}
                                                 </div>
                                             </div>
                                             <div className="col-lg-4">
