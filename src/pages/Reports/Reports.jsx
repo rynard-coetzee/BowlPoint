@@ -47,9 +47,11 @@ function getTeamLabel(team, allTeams = []) {
                 return numberA - numberB;
             }
 
-            return String(a.id || "").localeCompare(
-                String(b.id || "")
-            );
+            const idA = String(a.id || "");
+            const idB = String(b.id || "");
+            if (idA < idB) return -1;
+            if (idA > idB) return 1;
+            return 0;
         });
 
     const sequenceIndex = clubTeams.findIndex(
@@ -205,9 +207,13 @@ function Reports() {
                 b.points - a.points ||
                 b.aggregate - a.aggregate ||
                 b.shotsFor - a.shotsFor ||
-                getTeamLabel(a.team, reportData.teams).localeCompare(
-                    getTeamLabel(b.team, reportData.teams)
-                )
+                (() => {
+                    const nameA = String(getTeamLabel(a.team, reportData.teams) || "");
+                    const nameB = String(getTeamLabel(b.team, reportData.teams) || "");
+                    if (nameA < nameB) return -1;
+                    if (nameA > nameB) return 1;
+                    return 0;
+                })()
             );
     }, [reportData]);
 
@@ -333,7 +339,19 @@ function Reports() {
 
         return [...rows.values()]
             .map(row => ({ ...row, aggregate: row.shotsFor - row.shotsAgainst }))
-            .sort((a, b) => b.points - a.points || b.aggregate - a.aggregate || a.clubName.localeCompare(b.clubName));
+            .sort((a, b) => {
+                const pointDiff = b.points - a.points;
+                if (pointDiff !== 0) return pointDiff;
+
+                const aggregateDiff = b.aggregate - a.aggregate;
+                if (aggregateDiff !== 0) return aggregateDiff;
+
+                const nameA = String(a.clubName || "");
+                const nameB = String(b.clubName || "");
+                if (nameA < nameB) return -1;
+                if (nameA > nameB) return 1;
+                return 0;
+            });
     }, [reportData]);
 
     const selectedCompetition = reportData?.competition || competitions.find(item => item.id === selectedCompetitionId);
