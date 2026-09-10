@@ -23,8 +23,11 @@
  * - A semi-final/final can be scheduled separately, but remains part of the tournament's required days.
  * - If the full proposal cannot fit the preferred weekend pattern, the UI reports the extra rounds/days.
  *
- * Midweek scheduling:
- * - One round per playing day.
+ * Midweek – One Day scheduling:
+ * - One round per playing day, potentially over many weeks.
+ *
+ * Week scheduling:
+ * - Weekdays only, with up to 3 rounds per playing day.
  */
 
 const MIN_SECTION_SIZE = 3;
@@ -133,11 +136,32 @@ function getScheduleSummary({
             sectionalPlayingDays: sectionalRounds,
             playoffPlayingDays: playoffRounds,
             minimumPlayingDays: totalRounds,
-            preferredPattern: "1 round per midweek playing day",
-            normalSchedule: `${sectionalRounds} sectional day(s) + ${playoffRounds} playoff day(s).`,
+            preferredPattern: "1 round per midweek playing day, potentially over multiple weeks",
+            normalSchedule: `${totalRounds} playing day(s) required at one round per playing day.`,
             weekendCount: null,
             overflow: false,
             notes: [
+                "A bye still consumes its round/day.",
+                "The competition may span any number of midweek playing days.",
+                "Playoff rounds are included in the required competition days."
+            ]
+        };
+    }
+
+    if (competitionType === "week") {
+        const playingDays = Math.ceil(totalRounds / 3);
+
+        return {
+            competitionType,
+            sectionalPlayingDays: Math.ceil(sectionalRounds / 3),
+            playoffPlayingDays: Math.ceil(playoffRounds / 3),
+            minimumPlayingDays: playingDays,
+            preferredPattern: "Up to 3 rounds per weekday playing day",
+            normalSchedule: `${playingDays} playing day(s) required at up to 3 rounds per weekday.`,
+            weekendCount: null,
+            overflow: false,
+            notes: [
+                "Playing days may be scheduled on any Monday–Friday date.",
                 "A bye still consumes its round/day.",
                 "Playoff rounds are included in the required competition days."
             ]

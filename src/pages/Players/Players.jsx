@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import {
+    parseMembershipPdf,
+    reconcileMembership,
+    buildPlayerInsert
+} from "../../services/supabase/playerMembershipImportService";
 
 function Players() {
 
@@ -8,6 +13,9 @@ function Players() {
 
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [importing, setImporting] = useState(false);
+    const [importFile, setImportFile] = useState(null);
+    const [importResults, setImportResults] = useState(null);
 
     const [search, setSearch] = useState("");
 
@@ -158,6 +166,102 @@ function Players() {
 
         setEditingPlayer(null);
 
+    };
+
+
+    /*
+     * Membership PDF import / reconciliation
+     */
+    const handleMembershipImport = async (event) => {
+
+        const file = event.target.files?.[0];
+        event.target.value = "";
+
+        if (!file) {
+            return;
+        }
+
+        if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+            alert("Please select a PDF membership list.");
+            return;
+        }
+
+        try {
+            setImporting(true);
+            setImportFile(file);
+            setImportResults(null);
+
+            const records = await parseMembershipPdf(file);
+            const results = reconcileMembership(records, players, clubs);
+
+            setImportResults(results);
+        } catch (error) {
+            console.error("Membership PDF import failed:", error);
+            alert(`Unable to read the membership PDF.\n\n${error.message}`);
+            setImportFile(null);
+            setImportResults(null);
+        } finally {
+            setImporting(false);
+        }
+    };
+
+
+    const handleImportNewPlayers = async () => {
+
+        if (!importResults?.newPlayers?.length || saving) {
+            return;
+        }
+
+        const importable = importResults.newPlayers.filter(player => player.club_id);
+
+        if (!importable.length) {
+            alert("None of the new players have a matching BowlPoint club. Please add or correct the clubs first.");
+            return;
+        }
+
+        const confirmed = window.confirm(
+            `Import ${importable.length} new player${importable.length === 1 ? "" : "s"} into BowlPoint?\n\nPlayers without a matching club will not be imported.`
+        );
+
+        if (!confirmed) {
+            return;
+        }
+
+        setSaving(true);
+
+        try {
+            const payload = importable.map(buildPlayerInsert);
+
+            const { error } = await supabase
+                .from("players")
+                .insert(payload);
+
+            if (error) {
+                throw error;
+            }
+
+            await loadData();
+
+            setImportResults(prev => ({
+                ...prev,
+                newPlayers: prev.newPlayers.filter(player => !importable.some(
+                    imported => imported.bsa_number === player.bsa_number
+                ))
+            }));
+
+            alert(`${importable.length} new player${importable.length === 1 ? "" : "s"} imported successfully.`);
+        } catch (error) {
+            console.error("Failed to import new players:", error);
+            alert(`Unable to import the new players.\n\n${error.message}`);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+
+    const clearImportResults = () => {
+        setImportFile(null);
+        setImportResults(null);
     };
 
 
@@ -403,17 +507,38 @@ function Players() {
                 </div>
 
 
-                <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={handleAddPlayer}
-                >
+                <div className="d-flex gap-2">
 
-                    <i className="bi bi-person-plus-fill me-2"></i>
+                    <label className="btn btn-outline-primary mb-0">
 
-                    Add Player
+                        <i className="bi bi-file-earmark-pdf me-2"></i>
 
-                </button>
+                        {importing ? "Reading PDF..." : "Import Membership PDF"}
+
+                        <input
+                            type="file"
+                            accept="application/pdf,.pdf"
+                            className="d-none"
+                            onChange={handleMembershipImport}
+                            disabled={importing || saving}
+                        />
+
+                    </label>
+
+                    <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={handleAddPlayer}
+                        disabled={importing}
+                    >
+
+                        <i className="bi bi-person-plus-fill me-2"></i>
+
+                        Add Player
+
+                    </button>
+
+                </div>
 
             </div>
 
@@ -447,6 +572,198 @@ function Players() {
                 </div>
 
             </div>
+
+
+            {/* Membership reconciliation */}
+
+            {importResults && (
+
+                <div className="card shadow-sm border-0 mb-4">
+
+                    <div className="card-header bg-white d-flex justify-content-between align-items-center">
+
+                        <div>
+                            <h5 className="mb-1">
+                                <i className="bi bi-arrow-left-right me-2"></i>
+                                Membership Reconciliation
+                            </h5>
+                            <div className="small text-muted">
+                                {importFile?.name || "Membership PDF"} — no database changes were made by the comparison.
+                            </div>
+                        </div>
+
+                        <button
+                            type="button"
+                            className="btn btn-sm btn-outline-secondary"
+                            onClick={clearImportResults}
+                            disabled={saving}
+                        >
+                            Close
+                        </button>
+
+                    </div>
+
+                    <div className="card-body">
+
+                        <div className="row g-3 mb-4">
+
+                            <div className="col-md-3">
+                                <div className="border rounded p-3 h-100">
+                                    <div className="text-muted small">Master list</div>
+                                    <div className="fs-4 fw-bold">{importResults.masterCount}</div>
+                                    <div className="small text-muted">players read from PDF</div>
+                                </div>
+                            </div>
+
+                            <div className="col-md-3">
+                                <div className="border rounded p-3 h-100">
+                                    <div className="text-muted small">New players</div>
+                                    <div className="fs-4 fw-bold text-primary">{importResults.newPlayers.length}</div>
+                                    <div className="small text-muted">in PDF, not in BowlPoint</div>
+                                </div>
+                            </div>
+
+                            <div className="col-md-3">
+                                <div className="border rounded p-3 h-100">
+                                    <div className="text-muted small">Missing from master</div>
+                                    <div className="fs-4 fw-bold text-danger">{importResults.missingPlayers.length}</div>
+                                    <div className="small text-muted">in BowlPoint, not in PDF</div>
+                                </div>
+                            </div>
+
+                            <div className="col-md-3">
+                                <div className="border rounded p-3 h-100">
+                                    <div className="text-muted small">Club changes</div>
+                                    <div className="fs-4 fw-bold text-warning">{importResults.clubMismatches.length}</div>
+                                    <div className="small text-muted">same BSA number, different club</div>
+                                </div>
+                            </div>
+
+                        </div>
+
+                        {importResults.newPlayers.length > 0 && (
+
+                            <div className="mb-4">
+                                <div className="d-flex justify-content-between align-items-center mb-2">
+                                    <h6 className="mb-0">New Players</h6>
+                                    <button
+                                        type="button"
+                                        className="btn btn-sm btn-primary"
+                                        onClick={handleImportNewPlayers}
+                                        disabled={saving || !importResults.newPlayers.some(player => player.club_id)}
+                                    >
+                                        <i className="bi bi-person-plus me-1"></i>
+                                        Import New Players
+                                    </button>
+                                </div>
+
+                                <div className="table-responsive">
+                                    <table className="table table-sm table-hover align-middle mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>Player</th>
+                                                <th>BSA Number</th>
+                                                <th>Master Club</th>
+                                                <th>Match</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {importResults.newPlayers.map(player => (
+                                                <tr key={`new-${player.bsa_number}`}>
+                                                    <td>{player.source_name}</td>
+                                                    <td>{player.bsa_number}</td>
+                                                    <td>{player.club_name || "—"}</td>
+                                                    <td>
+                                                        {player.club_match ? (
+                                                            <span className="badge bg-success">Club matched</span>
+                                                        ) : (
+                                                            <span className="badge bg-warning text-dark">No club match</span>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                        )}
+
+                        {importResults.missingPlayers.length > 0 && (
+
+                            <div className="mb-4">
+                                <h6 className="mb-2">Players in BowlPoint but Missing from Master List</h6>
+                                <div className="table-responsive">
+                                    <table className="table table-sm table-hover align-middle mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>Player</th>
+                                                <th>BSA Number</th>
+                                                <th>Club</th>
+                                                <th>Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {importResults.missingPlayers.map(player => (
+                                                <tr key={`missing-${player.id}`}>
+                                                    <td>{player.nickname || player.first_name} {player.last_name}</td>
+                                                    <td>{player.bsa_number || "—"}</td>
+                                                    <td>{player.clubs?.short_name || player.clubs?.name || "—"}</td>
+                                                    <td><span className="badge bg-danger">Review</span></td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div className="small text-muted mt-2">
+                                    These players are not deleted or deactivated automatically. Review them before making any changes.
+                                </div>
+                            </div>
+
+                        )}
+
+                        {importResults.clubMismatches.length > 0 && (
+
+                            <div className="mb-2">
+                                <h6 className="mb-2">Club Changes</h6>
+                                <div className="table-responsive">
+                                    <table className="table table-sm table-hover align-middle mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>Player</th>
+                                                <th>BSA Number</th>
+                                                <th>Master Club</th>
+                                                <th>BowlPoint Club</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {importResults.clubMismatches.map(item => (
+                                                <tr key={`club-${item.bsa_number}`}>
+                                                    <td>{item.source_name}</td>
+                                                    <td>{item.bsa_number}</td>
+                                                    <td>{item.club_name || "—"}</td>
+                                                    <td>{item.player.clubs?.short_name || item.player.clubs?.name || "—"}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                        )}
+
+                        {importResults.newPlayers.length === 0 && importResults.missingPlayers.length === 0 && importResults.clubMismatches.length === 0 && (
+                            <div className="alert alert-success mb-0">
+                                <i className="bi bi-check-circle me-2"></i>
+                                BowlPoint matches the uploaded master membership list.
+                            </div>
+                        )}
+
+                    </div>
+
+                </div>
+
+            )}
 
 
             {/* Player form */}

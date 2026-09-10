@@ -3,10 +3,11 @@
  *
  * This is a proposal-only engine. It does not write dates or venues.
  * Rules supplied by the competition secretary:
+ *   Midweek – One Day: one round per playing day, potentially over many weeks.
+ *   Week: weekday competition, maximum 3 rounds per playing day.
  *   Weekend: maximum 3 rounds Saturday + 3 rounds Sunday.
  *   If the complete playoff stage does not fit in the remaining Sunday
  *   capacity, move the whole playoff stage to the next available Saturday.
- *   Midweek: one round per playing day.
  */
 
 function isSectionalRound(round) {
@@ -46,17 +47,47 @@ export function buildCompetitionScheduleProposal({ competitionType = "weekend", 
             sectionalRounds: sectional.length,
             playoffRounds: playoffs.length,
             playingDaysRequired: orderedRounds.length,
-            requiresAdditionalWeekend: orderedRounds.length > 7,
+            requiresAdditionalWeekend: false,
             days: orderedRounds.map((round, index) => ({
                 key: `midweek-${index + 1}`,
                 label: `Playing Day ${index + 1}`,
-                typeLabel: "Midweek — one round",
+                typeLabel: "Midweek – One Day — 1 round",
                 rounds: [{
                     roundNumber: round.round_number,
                     roundName: round.round_name,
                     matchCount: countMatches(round)
                 }]
             }))
+        };
+    }
+
+    if (competitionType === "week") {
+        const days = [];
+
+        // Week competitions may use any weekday and can play up to 3 rounds
+        // on each playing day. The secretary assigns the actual dates later.
+        for (let index = 0; index < orderedRounds.length; index += 3) {
+            const dayRounds = orderedRounds.slice(index, index + 3);
+
+            days.push({
+                key: `week-${days.length + 1}`,
+                label: `Playing Day ${days.length + 1}`,
+                typeLabel: "Week — up to 3 rounds",
+                rounds: dayRounds.map(round => ({
+                    roundNumber: round.round_number,
+                    roundName: round.round_name,
+                    matchCount: countMatches(round)
+                }))
+            });
+        }
+
+        return {
+            competitionType,
+            sectionalRounds: sectional.length,
+            playoffRounds: playoffs.length,
+            playingDaysRequired: days.length,
+            requiresAdditionalWeekend: false,
+            days
         };
     }
 

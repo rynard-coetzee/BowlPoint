@@ -137,16 +137,16 @@ function Competitions() {
                 competition.section_mode || (competition.structure === "round_robin" ? "none" : "multiple"),
 
             /*
-             * Scheduling is now selected as a mode.
-             * Internally we continue to use max_games_per_day
-             * so the existing scheduling engine remains compatible:
-             * Midweek = 1 round/day
-             * Weekend = 3 rounds/day
+             * Schedule type is now stored explicitly so Week and Weekend
+             * can both use up to 3 rounds per playing day.
+             * Older competitions without schedule_type are migrated from
+             * max_games_per_day: 1 = Midweek, otherwise Weekend.
              */
             schedule_type:
-                Number(competition.max_games_per_day) === 1
+                competition.schedule_type ||
+                (Number(competition.max_games_per_day) === 1
                     ? "midweek"
-                    : "weekend",
+                    : "weekend"),
 
             min_teams_per_section:
                 competition.min_teams_per_section || 3,
@@ -307,9 +307,12 @@ function Competitions() {
                     form.structure === "knockout" ? "none" : form.section_mode,
 
                 /*
-                 * Keep the existing database/scheduling-engine field
-                 * while exposing a simpler schedule mode to the user.
+                 * Store the scheduling mode explicitly. max_games_per_day
+                 * remains as the capacity hint used by the scheduling engine.
                  */
+                schedule_type:
+                    form.schedule_type,
+
                 max_games_per_day:
                     form.schedule_type === "midweek"
                         ? 1
@@ -924,11 +927,15 @@ function Competitions() {
                                     >
 
                                         <option value="midweek">
-                                            Midweek — 1 round per playing day
+                                            Midweek – One Day — 1 round per playing day
+                                        </option>
+
+                                        <option value="week">
+                                            Week — up to 3 rounds per playing day (Monday–Friday)
                                         </option>
 
                                         <option value="weekend">
-                                            Weekend — 3 rounds Saturday + 3 rounds Sunday
+                                            Weekend — up to 3 rounds per playing day (Saturday/Sunday)
                                         </option>
 
                                     </select>
