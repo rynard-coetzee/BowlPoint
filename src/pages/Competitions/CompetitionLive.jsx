@@ -360,6 +360,47 @@ function CompetitionLive() {
         };
     }, [matches]);
 
+    const clubPlayerSummary = useMemo(() => {
+        const byClub = new Map();
+
+        teams.forEach(team => {
+            const clubId = team.club_id || `team-${team.id}`;
+            const clubName =
+                team.clubs?.name?.trim() ||
+                team.club_short_name?.trim() ||
+                team.clubs?.short_name?.trim() ||
+                "Unassigned";
+            const clubCode =
+                team.clubs?.short_name?.trim() ||
+                team.club_short_name?.trim() ||
+                "";
+
+            if (!byClub.has(clubId)) {
+                byClub.set(clubId, {
+                    id: clubId,
+                    name: clubName,
+                    code: clubCode,
+                    playerIds: new Set()
+                });
+            }
+
+            const entry = byClub.get(clubId);
+            (team.competition_team_players || []).forEach(item => {
+                if (item.player_id) entry.playerIds.add(item.player_id);
+            });
+        });
+
+        return Array.from(byClub.values())
+            .map(entry => ({
+                ...entry,
+                playerCount: entry.playerIds.size
+            }))
+            .sort((a, b) =>
+                b.playerCount - a.playerCount ||
+                a.name.localeCompare(b.name)
+            );
+    }, [teams]);
+
     if (loading) {
         return (
             <div className="container py-5 text-center">
@@ -432,6 +473,36 @@ function CompetitionLive() {
                             </div>
                         </div>
 
+                        <div className="card shadow-sm border-0 mb-4">
+                            <div className="card-header bg-white">
+                                <h2 className="h5 mb-1"><i className="bi bi-people me-2"></i>Players by Club</h2>
+                                <div className="small text-muted">Number of players representing each club in this competition.</div>
+                            </div>
+                            <div className="table-responsive">
+                                <table className="table table-sm mb-0 align-middle">
+                                    <thead className="table-light">
+                                        <tr>
+                                            <th>Club</th>
+                                            <th className="text-center" style={{ width: 180 }}>Players</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {clubPlayerSummary.map(club => (
+                                            <tr key={club.id}>
+                                                <td>
+                                                    <span className="fw-semibold">{club.name}</span>
+                                                    {club.code && club.code !== club.name && (
+                                                        <span className="text-muted small ms-2">({club.code})</span>
+                                                    )}
+                                                </td>
+                                                <td className="text-center fw-bold">{club.playerCount}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
                         <div className="row g-3 mb-4">
                             {sections.map(section => {
                                 const standings = calculateStandings(section, matches, competition.scoring);
@@ -439,7 +510,7 @@ function CompetitionLive() {
                                 const complete = sectionMatches.length > 0 && sectionMatches.every(match => match.completed);
 
                                 return (
-                                    <div className="col-12 col-lg-6" key={section.id}>
+                                    <div className="col-12" key={section.id}>
                                         <div className="card shadow-sm border-0 h-100">
                                             <div className="card-header bg-white d-flex justify-content-between align-items-center">
                                                 <strong>{section.section_name}</strong>

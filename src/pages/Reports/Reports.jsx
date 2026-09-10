@@ -158,6 +158,12 @@ function Reports() {
             );
     }, [reportData]);
 
+    const playerLabel = (player) => {
+        if (!player) return "Unknown player";
+        const givenName = player.nickname || player.first_name || "";
+        return `${givenName} ${player.last_name || ""}`.trim() || player.display_name || "Unknown player";
+    };
+
     const playerPerformance = useMemo(() => {
         if (!reportData) return [];
 
@@ -306,12 +312,54 @@ function Reports() {
         return <span className={`badge ${className}`}>{label}</span>;
     };
 
-    const teamLabel = (team) => team?.team_name || "Unknown team";
+    /*
+     * Match the competition workspace's team naming rules.
+     *
+     * A blank team_name is intentional for automatically named teams.
+     * In that case use the club short code plus the team's sequence within
+     * that club, e.g. HBC1, HBC2.
+     */
+    const teamLabel = (team) => {
+        if (!team) return "TBD";
 
-    const playerLabel = (player) => {
-        if (!player) return "Unknown player";
-        const givenName = player.nickname || player.first_name || "";
-        return `${givenName} ${player.last_name || ""}`.trim() || player.display_name || "Unknown player";
+        const explicitName = team.team_name?.trim();
+        if (explicitName) return explicitName;
+
+        const clubCode =
+            team.clubs?.short_name?.trim() ||
+            team.clubs?.name?.trim() ||
+            "TEAM";
+
+        const clubTeams = (reportData?.teams || [])
+            .filter(item =>
+                item?.club_id &&
+                team.club_id &&
+                item.club_id === team.club_id
+            )
+            .slice()
+            .sort((a, b) => {
+                const numberA = a.team_number || 0;
+                const numberB = b.team_number || 0;
+
+                if (numberA !== numberB) {
+                    return numberA - numberB;
+                }
+
+                return String(a.id || "").localeCompare(
+                    String(b.id || "")
+                );
+            });
+
+        const sequenceIndex = clubTeams.findIndex(
+            item => item.id === team.id
+        );
+
+        const sequenceNumber =
+            sequenceIndex >= 0
+                ? sequenceIndex + 1
+                : team.team_number || 1;
+
+        return `${clubCode}${sequenceNumber}`;
     };
 
     const exportCsv = () => {

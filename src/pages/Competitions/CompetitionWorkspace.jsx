@@ -51,7 +51,7 @@ function CompetitionWorkspace() {
     const [showDayForm, setShowDayForm] = useState(false);
     const [showRoundForm, setShowRoundForm] = useState(false);
 
-    const [selectedClubId, setSelectedClubId] = useState("");
+    const [selectedClubIds, setSelectedClubIds] = useState([]);
     const [editingTeam, setEditingTeam] = useState(null);
     const [editingDay, setEditingDay] = useState(null);
     const [editingRound, setEditingRound] = useState(null);
@@ -1139,47 +1139,51 @@ function CompetitionWorkspace() {
      * Add participating club.
      */
     const handleAddClub = async () => {
-        if (!selectedClubId) {
-            alert("Please select a club.");
+        if (!selectedClubIds.length) {
+            alert("Please select at least one club.");
             return;
         }
 
-        const alreadyAdded = participatingClubs.some(
-            item => item.club_id === selectedClubId
+        const availableClubIds = new Set(
+            availableClubs.map(club => club.id)
         );
 
-        if (alreadyAdded) {
-            alert(
-                "This club has already been added to the competition."
-            );
+        const clubIdsToAdd = selectedClubIds.filter(
+            clubId => availableClubIds.has(clubId)
+        );
+
+        if (!clubIdsToAdd.length) {
+            alert("The selected clubs are already in this competition.");
             return;
         }
 
         setSaving(true);
 
+        const rows = clubIdsToAdd.map(clubId => ({
+            competition_id: competitionId,
+            club_id: clubId
+        }));
+
         const { error } = await supabase
             .from("competition_clubs")
-            .insert({
-                competition_id: competitionId,
-                club_id: selectedClubId
-            });
+            .insert(rows);
 
         setSaving(false);
 
         if (error) {
             console.error(
-                "Error adding club:",
+                "Error adding clubs:",
                 error
             );
 
             alert(
-                `Unable to add club.\n\n${error.message}`
+                `Unable to add clubs.\n\n${error.message}`
             );
 
             return;
         }
 
-        setSelectedClubId("");
+        setSelectedClubIds([]);
         setShowClubForm(false);
 
         await loadData();
@@ -2353,6 +2357,61 @@ function CompetitionWorkspace() {
     };
 
     /*
+     * Player counts by participating club. Counts are based on the players
+     * actually assigned to competition teams and are unique per player.
+     */
+    const getClubPlayerCounts = () => {
+        const counts = new Map();
+
+        participatingClubs.forEach(entry => {
+            const club = entry.clubs || entry.club || {};
+            const clubId = entry.club_id || club.id;
+
+            if (!clubId) return;
+
+            counts.set(clubId, {
+                clubId,
+                name: club.name || entry.name || "Unknown Club",
+                shortName: club.short_name || "",
+                playerIds: new Set()
+            });
+        });
+
+        teams.forEach(team => {
+            const clubId = team.club_id;
+            if (!clubId) return;
+
+            if (!counts.has(clubId)) {
+                const club = team.clubs || {};
+                counts.set(clubId, {
+                    clubId,
+                    name: club.name || "Unknown Club",
+                    shortName: club.short_name || "",
+                    playerIds: new Set()
+                });
+            }
+
+            const entry = counts.get(clubId);
+            (team.competition_team_players || []).forEach(teamPlayer => {
+                if (teamPlayer.player_id) {
+                    entry.playerIds.add(teamPlayer.player_id);
+                }
+            });
+        });
+
+        return Array.from(counts.values())
+            .map(entry => ({
+                ...entry,
+                playerCount: entry.playerIds.size
+            }))
+            .sort((a, b) =>
+                a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+            );
+    };
+
+    const clubPlayerCounts = getClubPlayerCounts();
+
+    /*
      * Available clubs.
      */
     const availableClubs =
@@ -2901,9 +2960,55 @@ function CompetitionWorkspace() {
             </div>
 
 
+            {/* Players by Club */}
+
+            <div className="card shadow-sm border-0 mb-4">
+
+                <div className="card-header bg-white d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 className="mb-0">
+                            <i className="bi bi-people me-2"></i>
+                            Players by Club
+                        </h5>
+                        <div className="small text-muted mt-1">
+                            Players currently entered into competition teams.
+                        </div>
+                    </div>
+                </div>
+
+                <div className="card-body py-3">
+                    {clubPlayerCounts.length === 0 ? (
+                        <div className="text-muted small">
+                            No participating clubs have been added yet.
+                        </div>
+                    ) : (
+                        <div className="row g-3">
+                            {clubPlayerCounts.map(club => (
+                                <div className="col-sm-6 col-lg-4 col-xl-3" key={club.clubId}>
+                                    <div className="border rounded p-3 h-100 d-flex justify-content-between align-items-center">
+                                        <div className="me-3">
+                                            <div className="fw-semibold">{club.name}</div>
+                                            {club.shortName && (
+                                                <div className="small text-muted">{club.shortName}</div>
+                                            )}
+                                        </div>
+                                        <div className="text-end">
+                                            <div className="fs-4 fw-bold">{club.playerCount}</div>
+                                            <div className="small text-muted">players</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+            </div>
+
+
             {/* Participating Clubs */}
 
-            <div id="workspace-clubs" className={`card shadow-sm border-0 mb-4 workspace-stage-card ${!showSetupDetails && workspaceStage !== "teams" ? "workspace-collapsed" : ""}`}>
+            <div id="workspace-clubs" className={`card shadow-sm border-0 mb-4 workspace-stage-card ${!showSetupDetails && confirmedDraw && workspaceStage !== "teams" ? "workspace-collapsed" : ""}`}>
 
                 <div className="card-header bg-white d-flex justify-content-between align-items-center">
 
@@ -2929,7 +3034,7 @@ function CompetitionWorkspace() {
                         className="btn btn-primary"
                         onClick={() => {
 
-                            setSelectedClubId("");
+                            setSelectedClubIds([]);
 
                             setShowClubForm(
                                 !showClubForm
@@ -2955,35 +3060,76 @@ function CompetitionWorkspace() {
                             <div className="col-md-8">
 
                                 <label className="form-label">
-                                    Select Club
+                                    Select Clubs
                                 </label>
 
-                                <select
-                                    className="form-select"
-                                    value={selectedClubId}
-                                    onChange={(e) =>
-                                        setSelectedClubId(
-                                            e.target.value
-                                        )
-                                    }
-                                >
+                                {availableClubs.length === 0 ? (
+                                    <div className="text-muted small border rounded p-3">
+                                        All available clubs have already been added to this competition.
+                                    </div>
+                                ) : (
+                                    <div className="border rounded p-3">
 
-                                    <option value="">
-                                        Select a club...
-                                    </option>
+                                        <div className="d-flex justify-content-between align-items-center mb-2">
+                                            <span className="small text-muted">
+                                                Select one or more clubs to add together.
+                                            </span>
 
-                                    {availableClubs.map(
-                                        club => (
-                                            <option
-                                                key={club.id}
-                                                value={club.id}
+                                            <button
+                                                type="button"
+                                                className="btn btn-sm btn-outline-secondary"
+                                                onClick={() => {
+                                                    if (selectedClubIds.length === availableClubs.length) {
+                                                        setSelectedClubIds([]);
+                                                    } else {
+                                                        setSelectedClubIds(
+                                                            availableClubs.map(club => club.id)
+                                                        );
+                                                    }
+                                                }}
+                                                disabled={saving}
                                             >
-                                                {club.name}
-                                            </option>
-                                        )
-                                    )}
+                                                {selectedClubIds.length === availableClubs.length
+                                                    ? "Clear all"
+                                                    : "Select all"}
+                                            </button>
+                                        </div>
 
-                                </select>
+                                        <div className="row g-2">
+                                            {availableClubs.map(club => (
+                                                <div
+                                                    key={club.id}
+                                                    className="col-12 col-md-6"
+                                                >
+                                                    <div className="form-check">
+                                                        <input
+                                                            id={`competition-club-${club.id}`}
+                                                            className="form-check-input"
+                                                            type="checkbox"
+                                                            checked={selectedClubIds.includes(club.id)}
+                                                            onChange={() => {
+                                                                setSelectedClubIds(prev =>
+                                                                    prev.includes(club.id)
+                                                                        ? prev.filter(id => id !== club.id)
+                                                                        : [...prev, club.id]
+                                                                );
+                                                            }}
+                                                            disabled={saving}
+                                                        />
+
+                                                        <label
+                                                            className="form-check-label"
+                                                            htmlFor={`competition-club-${club.id}`}
+                                                        >
+                                                            {club.name}
+                                                        </label>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+
+                                    </div>
+                                )}
 
                             </div>
 
@@ -2994,7 +3140,7 @@ function CompetitionWorkspace() {
                                     type="button"
                                     className="btn btn-success me-2"
                                     onClick={handleAddClub}
-                                    disabled={saving}
+                                    disabled={saving || selectedClubIds.length === 0}
                                 >
 
                                     {saving ? (
@@ -3008,7 +3154,7 @@ function CompetitionWorkspace() {
                                     ) : (
                                         <>
                                             <i className="bi bi-check-lg me-2"></i>
-                                            Add Club
+                                            Add {selectedClubIds.length || "Selected"} Club{selectedClubIds.length === 1 ? "" : "s"}
                                         </>
                                     )}
 
@@ -3018,9 +3164,10 @@ function CompetitionWorkspace() {
                                 <button
                                     type="button"
                                     className="btn btn-outline-secondary"
-                                    onClick={() =>
-                                        setShowClubForm(false)
-                                    }
+                                    onClick={() => {
+                                        setSelectedClubIds([]);
+                                        setShowClubForm(false);
+                                    }}
                                     disabled={saving}
                                 >
                                     Cancel
@@ -3139,7 +3286,7 @@ function CompetitionWorkspace() {
 
             {/* Competition Teams */}
 
-            <div id="workspace-teams" className={`card shadow-sm border-0 mb-4 workspace-stage-card ${!showSetupDetails && workspaceStage !== "teams" ? "workspace-collapsed" : ""}`}>
+            <div id="workspace-teams" className={`card shadow-sm border-0 mb-4 workspace-stage-card ${!showSetupDetails && confirmedDraw && workspaceStage !== "teams" ? "workspace-collapsed" : ""}`}>
 
                 <div className="card-header bg-white d-flex justify-content-between align-items-center">
 
@@ -4584,7 +4731,7 @@ function CompetitionWorkspace() {
                                                     const winner = complete ? standings[0] : null;
 
                                                     return (
-                                                        <div className="col-xl-6" key={section.id}>
+                                                        <div className="col-12" key={section.id}>
                                                             <div
                                                                 ref={element => { scoringSectionRefs.current[section.id] = element; }}
                                                                 className={`card border h-100 ${collapsedScoringSections[section.id] ? "workspace-section-collapsed" : ""}`}
