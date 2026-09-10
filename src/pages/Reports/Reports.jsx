@@ -13,6 +13,57 @@ const REPORT_TYPES = [
     { key: "clubs", label: "Club Performance", icon: "building-fill" }
 ];
 
+function getPlayerLabel(player) {
+    if (!player) return "Unknown player";
+    const givenName = player.nickname || player.first_name || "";
+    return `${givenName} ${player.last_name || ""}`.trim() || player.display_name || "Unknown player";
+}
+
+function getTeamLabel(team, allTeams = []) {
+    if (!team) return "TBD";
+
+    const explicitName = team.team_name?.trim();
+    if (explicitName) return explicitName;
+
+    const clubCode =
+        team.clubs?.short_name?.trim() ||
+        team.club_short_name?.trim() ||
+        team.clubs?.name?.trim() ||
+        team.clubName?.trim() ||
+        "TEAM";
+
+    const clubTeams = (allTeams || [])
+        .filter(item =>
+            item?.club_id &&
+            team.club_id &&
+            item.club_id === team.club_id
+        )
+        .slice()
+        .sort((a, b) => {
+            const numberA = a.team_number || 0;
+            const numberB = b.team_number || 0;
+
+            if (numberA !== numberB) {
+                return numberA - numberB;
+            }
+
+            return String(a.id || "").localeCompare(
+                String(b.id || "")
+            );
+        });
+
+    const sequenceIndex = clubTeams.findIndex(
+        item => item.id === team.id
+    );
+
+    const sequenceNumber =
+        sequenceIndex >= 0
+            ? sequenceIndex + 1
+            : clubTeams.length + 1;
+
+    return `${clubCode}${sequenceNumber}`;
+}
+
 function Reports() {
     const [competitions, setCompetitions] = useState([]);
     const [selectedCompetitionId, setSelectedCompetitionId] = useState("");
@@ -158,12 +209,6 @@ function Reports() {
             );
     }, [reportData]);
 
-    const playerLabel = (player) => {
-        if (!player) return "Unknown player";
-        const givenName = player.nickname || player.first_name || "";
-        return `${givenName} ${player.last_name || ""}`.trim() || player.display_name || "Unknown player";
-    };
-
     const playerPerformance = useMemo(() => {
         if (!reportData) return [];
 
@@ -217,8 +262,8 @@ function Reports() {
                 b.wins - a.wins ||
                 b.aggregate - a.aggregate ||
                 b.shotsFor - a.shotsFor ||
-                (playerLabel(a.player)).localeCompare(
-                    playerLabel(b.player)
+                (getPlayerLabel(a.player)).localeCompare(
+                    getPlayerLabel(b.player)
                 )
             );
     }, [reportData]);
@@ -312,56 +357,6 @@ function Reports() {
         return <span className={`badge ${className}`}>{label}</span>;
     };
 
-    /*
-     * Match the competition workspace's team naming rules.
-     *
-     * A blank team_name is intentional for automatically named teams.
-     * In that case use the club short code plus the team's sequence within
-     * that club, e.g. HBC1, HBC2.
-     */
-    const teamLabel = (team) => {
-        if (!team) return "TBD";
-
-        const explicitName = team.team_name?.trim();
-        if (explicitName) return explicitName;
-
-        const clubCode =
-            team.clubs?.short_name?.trim() ||
-            team.clubs?.name?.trim() ||
-            "TEAM";
-
-        const clubTeams = (reportData?.teams || [])
-            .filter(item =>
-                item?.club_id &&
-                team.club_id &&
-                item.club_id === team.club_id
-            )
-            .slice()
-            .sort((a, b) => {
-                const numberA = a.team_number || 0;
-                const numberB = b.team_number || 0;
-
-                if (numberA !== numberB) {
-                    return numberA - numberB;
-                }
-
-                return String(a.id || "").localeCompare(
-                    String(b.id || "")
-                );
-            });
-
-        const sequenceIndex = clubTeams.findIndex(
-            item => item.id === team.id
-        );
-
-        const sequenceNumber =
-            sequenceIndex >= 0
-                ? sequenceIndex + 1
-                : team.team_number || 1;
-
-        return `${clubCode}${sequenceNumber}`;
-    };
-
     const exportCsv = () => {
         if (!reportData) return;
 
@@ -371,13 +366,13 @@ function Reports() {
 
         if (reportType === "standings") {
             headers = ["Position", "Team", "Club", "Played", "Wins", "Draws", "Losses", "Points", "Shots For", "Shots Against", "Aggregate"];
-            rows = standings.map((row, index) => [index + 1, row.team.team_name, row.team.clubs?.name || "", row.played, row.wins, row.draws, row.losses, row.points, row.shotsFor, row.shotsAgainst, row.aggregate]);
+            rows = standings.map((row, index) => [index + 1, getTeamLabel(row.team, reportData?.teams), row.team.clubs?.name || "", row.played, row.wins, row.draws, row.losses, row.points, row.shotsFor, row.shotsAgainst, row.aggregate]);
         } else if (reportType === "results") {
             headers = ["Round", "Match", "Team A", "Score A", "Team B", "Score B", "Status", "Completed"];
-            rows = reportData.matches.map(match => [match.round?.round_name || `Round ${match.round?.round_number || ""}`, match.match_number, teamLabel(match.teamA), match.score_a ?? "", teamLabel(match.teamB), match.score_b ?? "", match.completed ? "Completed" : "Pending", match.completed_at || ""]);
+            rows = reportData.matches.map(match => [match.round?.round_name || `Round ${match.round?.round_number || ""}`, match.match_number, getTeamLabel(match.teamA, reportData?.teams), match.score_a ?? "", getTeamLabel(match.teamB, reportData?.teams), match.score_b ?? "", match.completed ? "Completed" : "Pending", match.completed_at || ""]);
         } else if (reportType === "players") {
             headers = ["Player", "Played", "Wins", "Draws", "Losses", "Shots For", "Shots Against", "Aggregate"];
-            rows = playerPerformance.map(row => [playerLabel(row.player), row.played, row.wins, row.draws, row.losses, row.shotsFor, row.shotsAgainst, row.aggregate]);
+            rows = playerPerformance.map(row => [getPlayerLabel(row.player), row.played, row.wins, row.draws, row.losses, row.shotsFor, row.shotsAgainst, row.aggregate]);
         } else if (reportType === "clubs") {
             headers = ["Club", "Teams", "Played", "Wins", "Draws", "Losses", "Points", "Shots For", "Shots Against", "Aggregate"];
             rows = clubPerformance.map(row => [row.clubName, row.teams, row.played, row.wins, row.draws, row.losses, row.points, row.shotsFor, row.shotsAgainst, row.aggregate]);
@@ -512,9 +507,9 @@ function Reports() {
                             </div>
 
                             {reportType === "summary" && <SummaryReport stats={stats} competition={selectedCompetition} />}
-                            {reportType === "standings" && <StandingsReport standings={standings} teamLabel={teamLabel} />}
-                            {reportType === "results" && <ResultsReport matches={reportData.matches} teamLabel={teamLabel} formatDate={formatDate} />}
-                            {reportType === "players" && <PlayersReport rows={playerPerformance} playerLabel={playerLabel} />}
+                            {reportType === "standings" && <StandingsReport standings={standings} allTeams={reportData?.teams || []} />}
+                            {reportType === "results" && <ResultsReport matches={reportData.matches} allTeams={reportData?.teams || []} formatDate={formatDate} />}
+                            {reportType === "players" && <PlayersReport rows={playerPerformance} />}
                             {reportType === "clubs" && <ClubsReport rows={clubPerformance} />}
                         </>
                     ) : null}
@@ -580,7 +575,7 @@ function InfoItem({ label, value }) {
     return <div className="col-6 col-md-3"><div className="small text-muted">{label}</div><div className="fw-semibold">{value}</div></div>;
 }
 
-function StandingsReport({ standings, teamLabel }) {
+function StandingsReport({ standings, allTeams }) {
     return (
         <ReportTable title="Standings" icon="trophy-fill">
             <table className="table table-hover align-middle mb-0">
@@ -589,7 +584,7 @@ function StandingsReport({ standings, teamLabel }) {
                     {standings.map((row, index) => (
                         <tr key={row.team.id} className={index === 0 ? "table-success" : ""}>
                             <td className="fw-bold">{index + 1}</td>
-                            <td className="fw-semibold">{teamLabel(row.team)}</td>
+                            <td className="fw-semibold">{getTeamLabel(row.team, allTeams)}</td>
                             <td>{row.team.clubs?.name || "—"}</td>
                             <td className="text-center">{row.played}</td>
                             <td className="text-center">{row.wins}</td>
@@ -607,7 +602,7 @@ function StandingsReport({ standings, teamLabel }) {
     );
 }
 
-function ResultsReport({ matches, teamLabel, formatDate }) {
+function ResultsReport({ matches, allTeams, formatDate }) {
     const ordered = [...matches].sort((a, b) => (a.round?.round_number || 0) - (b.round?.round_number || 0) || a.match_number - b.match_number);
     return (
         <ReportTable title="Match Results" icon="list-ol">
@@ -618,9 +613,9 @@ function ResultsReport({ matches, teamLabel, formatDate }) {
                         <tr key={match.id}>
                             <td>{match.round?.round_name || `Round ${match.round?.round_number || "—"}`}</td>
                             <td>{match.match_number}</td>
-                            <td>{teamLabel(match.teamA)}</td>
+                            <td>{getTeamLabel(match.teamA, allTeams)}</td>
                             <td className="text-center fw-bold">{match.completed ? match.score_a : "—"}</td>
-                            <td>{teamLabel(match.teamB)}</td>
+                            <td>{getTeamLabel(match.teamB, allTeams)}</td>
                             <td className="text-center fw-bold">{match.completed ? match.score_b : "—"}</td>
                             <td><span className={`badge ${match.completed ? "bg-success" : "bg-secondary"}`}>{match.completed ? "Completed" : "Pending"}</span></td>
                             <td className="small text-muted">{match.completed_at ? formatDate(match.completed_at.slice(0, 10)) : "—"}</td>
@@ -632,7 +627,7 @@ function ResultsReport({ matches, teamLabel, formatDate }) {
     );
 }
 
-function PlayersReport({ rows, playerLabel }) {
+function PlayersReport({ rows }) {
     return (
         <ReportTable title="Player Performance" icon="people-fill">
             <table className="table table-hover align-middle mb-0">
@@ -641,7 +636,7 @@ function PlayersReport({ rows, playerLabel }) {
                     {rows.map((row, index) => (
                         <tr key={row.player.id}>
                             <td>{index + 1}</td>
-                            <td className="fw-semibold">{playerLabel(row.player)}</td>
+                            <td className="fw-semibold">{getPlayerLabel(row.player)}</td>
                             <td className="text-center">{row.played}</td>
                             <td className="text-center">{row.wins}</td>
                             <td className="text-center">{row.draws}</td>
