@@ -162,6 +162,7 @@ function Reports() {
                 wins: 0,
                 draws: 0,
                 losses: 0,
+                skinsWon: 0,
                 points: 0,
                 shotsFor: 0,
                 shotsAgainst: 0
@@ -182,6 +183,15 @@ function Reports() {
             a.shotsAgainst += scoreB;
             b.shotsFor += scoreB;
             b.shotsAgainst += scoreA;
+
+            const skinsA = Number(match.skins_a ?? 0);
+            const skinsB = Number(match.skins_b ?? 0);
+            if (scoring.skins?.enabled) {
+                a.skinsWon += skinsA;
+                b.skinsWon += skinsB;
+                a.points += skinsA * Number(scoring.skins.pointsPerSkin ?? 1);
+                b.points += skinsB * Number(scoring.skins.pointsPerSkin ?? 1);
+            }
 
             if (scoreA > scoreB) {
                 a.wins += 1;
@@ -292,6 +302,7 @@ function Reports() {
                     wins: 0,
                     draws: 0,
                     losses: 0,
+                    skinsWon: 0,
                     shotsFor: 0,
                     shotsAgainst: 0,
                     points: 0
@@ -318,6 +329,15 @@ function Reports() {
             a.shotsAgainst += scoreB;
             b.shotsFor += scoreB;
             b.shotsAgainst += scoreA;
+
+            const skinsA = Number(match.skins_a ?? 0);
+            const skinsB = Number(match.skins_b ?? 0);
+            if (scoring.skins?.enabled) {
+                a.skinsWon += skinsA;
+                b.skinsWon += skinsB;
+                a.points += skinsA * Number(scoring.skins.pointsPerSkin ?? 1);
+                b.points += skinsB * Number(scoring.skins.pointsPerSkin ?? 1);
+            }
 
             if (scoreA > scoreB) {
                 a.wins += 1;
@@ -385,17 +405,17 @@ function Reports() {
         const escape = value => `"${String(value ?? "").replaceAll('"', '""')}"`;
 
         if (reportType === "standings") {
-            headers = ["Position", "Team", "Club", "Played", "Wins", "Draws", "Losses", "Points", "Shots For", "Shots Against", "Aggregate"];
-            rows = standings.map((row, index) => [index + 1, getTeamLabel(row.team, reportData?.teams), row.team.clubs?.name || "", row.played, row.wins, row.draws, row.losses, row.points, row.shotsFor, row.shotsAgainst, row.aggregate]);
+            headers = ["Position", "Team", "Club", "Played", "Wins", "Draws", "Losses", "Skins", "Points", "Shots For", "Shots Against", "Aggregate"];
+            rows = standings.map((row, index) => [index + 1, getTeamLabel(row.team, reportData?.teams), row.team.clubs?.name || "", row.played, row.wins, row.draws, row.losses, row.skinsWon, row.points, row.shotsFor, row.shotsAgainst, row.aggregate]);
         } else if (reportType === "results") {
-            headers = ["Round", "Match", "Team A", "Score A", "Team B", "Score B", "Status", "Completed"];
-            rows = reportData.matches.map(match => [match.round?.round_name || `Round ${match.round?.round_number || ""}`, match.match_number, getTeamLabel(match.teamA, reportData?.teams), match.score_a ?? "", getTeamLabel(match.teamB, reportData?.teams), match.score_b ?? "", match.completed ? "Completed" : "Pending", match.completed_at || ""]);
+            headers = ["Round", "Match", "Team A", "Score A", "Skins A", "Team B", "Score B", "Skins B", "Status", "Completed"];
+            rows = reportData.matches.map(match => [match.round?.round_name || `Round ${match.round?.round_number || ""}`, match.match_number, getTeamLabel(match.teamA, reportData?.teams), match.score_a ?? "", match.skins_a ?? "", getTeamLabel(match.teamB, reportData?.teams), match.score_b ?? "", match.skins_b ?? "", match.completed ? "Completed" : "Pending", match.completed_at || ""]);
         } else if (reportType === "players") {
             headers = ["Player", "Played", "Wins", "Draws", "Losses", "Shots For", "Shots Against", "Aggregate"];
             rows = playerPerformance.map(row => [getPlayerLabel(row.player), row.played, row.wins, row.draws, row.losses, row.shotsFor, row.shotsAgainst, row.aggregate]);
         } else if (reportType === "clubs") {
-            headers = ["Club", "Teams", "Played", "Wins", "Draws", "Losses", "Points", "Shots For", "Shots Against", "Aggregate"];
-            rows = clubPerformance.map(row => [row.clubName, row.teams, row.played, row.wins, row.draws, row.losses, row.points, row.shotsFor, row.shotsAgainst, row.aggregate]);
+            headers = ["Club", "Teams", "Played", "Wins", "Draws", "Losses", "Skins", "Points", "Shots For", "Shots Against", "Aggregate"];
+            rows = clubPerformance.map(row => [row.clubName, row.teams, row.played, row.wins, row.draws, row.losses, row.skinsWon, row.points, row.shotsFor, row.shotsAgainst, row.aggregate]);
         } else {
             headers = ["Metric", "Value"];
             rows = [
@@ -527,10 +547,10 @@ function Reports() {
                             </div>
 
                             {reportType === "summary" && <SummaryReport stats={stats} competition={selectedCompetition} />}
-                            {reportType === "standings" && <StandingsReport standings={standings} allTeams={reportData?.teams || []} />}
-                            {reportType === "results" && <ResultsReport matches={reportData.matches} allTeams={reportData?.teams || []} formatDate={formatDate} />}
+                            {reportType === "standings" && <StandingsReport standings={standings} allTeams={reportData?.teams || []} skinsEnabled={Boolean(reportData?.competition?.scoring?.skins?.enabled)} />}
+                            {reportType === "results" && <ResultsReport matches={reportData.matches} allTeams={reportData?.teams || []} formatDate={formatDate} skinsEnabled={Boolean(reportData?.competition?.scoring?.skins?.enabled)} />}
                             {reportType === "players" && <PlayersReport rows={playerPerformance} />}
-                            {reportType === "clubs" && <ClubsReport rows={clubPerformance} />}
+                            {reportType === "clubs" && <ClubsReport rows={clubPerformance} skinsEnabled={Boolean(reportData?.competition?.scoring?.skins?.enabled)} />}
                         </>
                     ) : null}
                 </>
@@ -595,11 +615,11 @@ function InfoItem({ label, value }) {
     return <div className="col-6 col-md-3"><div className="small text-muted">{label}</div><div className="fw-semibold">{value}</div></div>;
 }
 
-function StandingsReport({ standings, allTeams }) {
+function StandingsReport({ standings, allTeams, skinsEnabled }) {
     return (
         <ReportTable title="Standings" icon="trophy-fill">
             <table className="table table-hover align-middle mb-0">
-                <thead className="table-light"><tr><th>#</th><th>Team</th><th>Club</th><th className="text-center">P</th><th className="text-center">W</th><th className="text-center">D</th><th className="text-center">L</th><th className="text-center">Pts</th><th className="text-center">SF</th><th className="text-center">SA</th><th className="text-center">Agg</th></tr></thead>
+                <thead className="table-light"><tr><th>#</th><th>Team</th><th>Club</th><th className="text-center">P</th><th className="text-center">W</th><th className="text-center">D</th><th className="text-center">L</th>{skinsEnabled && <th className="text-center">Skins</th>}<th className="text-center">Pts</th><th className="text-center">SF</th><th className="text-center">SA</th><th className="text-center">Agg</th></tr></thead>
                 <tbody>
                     {standings.map((row, index) => (
                         <tr key={row.team.id} className={index === 0 ? "table-success" : ""}>
@@ -610,6 +630,7 @@ function StandingsReport({ standings, allTeams }) {
                             <td className="text-center">{row.wins}</td>
                             <td className="text-center">{row.draws}</td>
                             <td className="text-center">{row.losses}</td>
+                            {skinsEnabled && <td className="text-center">{row.skinsWon}</td>}
                             <td className="text-center fw-bold">{row.points}</td>
                             <td className="text-center">{row.shotsFor}</td>
                             <td className="text-center">{row.shotsAgainst}</td>
@@ -622,12 +643,12 @@ function StandingsReport({ standings, allTeams }) {
     );
 }
 
-function ResultsReport({ matches, allTeams, formatDate }) {
+function ResultsReport({ matches, allTeams, formatDate, skinsEnabled }) {
     const ordered = [...matches].sort((a, b) => (a.round?.round_number || 0) - (b.round?.round_number || 0) || a.match_number - b.match_number);
     return (
         <ReportTable title="Match Results" icon="list-ol">
             <table className="table table-hover align-middle mb-0">
-                <thead className="table-light"><tr><th>Round</th><th>Match</th><th>Team A</th><th className="text-center">Score</th><th>Team B</th><th className="text-center">Score</th><th>Status</th><th>Completed</th></tr></thead>
+                <thead className="table-light"><tr><th>Round</th><th>Match</th><th>Team A</th><th className="text-center">Score</th>{skinsEnabled && <th className="text-center">Skins</th>}<th>Team B</th><th className="text-center">Score</th>{skinsEnabled && <th className="text-center">Skins</th>}<th>Status</th><th>Completed</th></tr></thead>
                 <tbody>
                     {ordered.map(match => (
                         <tr key={match.id}>
@@ -635,8 +656,10 @@ function ResultsReport({ matches, allTeams, formatDate }) {
                             <td>{match.match_number}</td>
                             <td>{getTeamLabel(match.teamA, allTeams)}</td>
                             <td className="text-center fw-bold">{match.completed ? match.score_a : "—"}</td>
+                            {skinsEnabled && <td className="text-center">{match.completed ? (match.skins_a ?? 0) : "—"}</td>}
                             <td>{getTeamLabel(match.teamB, allTeams)}</td>
                             <td className="text-center fw-bold">{match.completed ? match.score_b : "—"}</td>
+                            {skinsEnabled && <td className="text-center">{match.completed ? (match.skins_b ?? 0) : "—"}</td>}
                             <td><span className={`badge ${match.completed ? "bg-success" : "bg-secondary"}`}>{match.completed ? "Completed" : "Pending"}</span></td>
                             <td className="small text-muted">{match.completed_at ? formatDate(match.completed_at.slice(0, 10)) : "—"}</td>
                         </tr>
@@ -673,11 +696,11 @@ function PlayersReport({ rows }) {
     );
 }
 
-function ClubsReport({ rows }) {
+function ClubsReport({ rows, skinsEnabled }) {
     return (
         <ReportTable title="Club Performance" icon="building-fill">
             <table className="table table-hover align-middle mb-0">
-                <thead className="table-light"><tr><th>#</th><th>Club</th><th className="text-center">Teams</th><th className="text-center">P</th><th className="text-center">W</th><th className="text-center">D</th><th className="text-center">L</th><th className="text-center">Pts</th><th className="text-center">SF</th><th className="text-center">SA</th><th className="text-center">Agg</th></tr></thead>
+                <thead className="table-light"><tr><th>#</th><th>Club</th><th className="text-center">Teams</th><th className="text-center">P</th><th className="text-center">W</th><th className="text-center">D</th><th className="text-center">L</th>{skinsEnabled && <th className="text-center">Skins</th>}<th className="text-center">Pts</th><th className="text-center">SF</th><th className="text-center">SA</th><th className="text-center">Agg</th></tr></thead>
                 <tbody>
                     {rows.map((row, index) => (
                         <tr key={row.clubId}>
@@ -688,6 +711,7 @@ function ClubsReport({ rows }) {
                             <td className="text-center">{row.wins}</td>
                             <td className="text-center">{row.draws}</td>
                             <td className="text-center">{row.losses}</td>
+                            {skinsEnabled && <td className="text-center">{row.skinsWon}</td>}
                             <td className="text-center fw-bold">{row.points}</td>
                             <td className="text-center">{row.shotsFor}</td>
                             <td className="text-center">{row.shotsAgainst}</td>

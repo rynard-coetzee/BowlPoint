@@ -27,7 +27,9 @@ function Competitions() {
         max_teams_per_section: 6,
         win_points: 2,
         draw_points: 1,
-        loss_points: 0
+        loss_points: 0,
+        skins_enabled: false,
+        points_per_skin: 1
     });
 
 
@@ -92,7 +94,9 @@ function Competitions() {
             max_teams_per_section: 6,
             win_points: 2,
             draw_points: 1,
-            loss_points: 0
+            loss_points: 0,
+        skins_enabled: false,
+        points_per_skin: 1
         });
 
         setEditingCompetition(null);
@@ -161,7 +165,13 @@ function Competitions() {
                 scoring.draw ?? 1,
 
             loss_points:
-                scoring.loss ?? 0
+                scoring.loss ?? 0,
+
+            skins_enabled:
+                scoring.skins?.enabled ?? false,
+
+            points_per_skin:
+                scoring.skins?.pointsPerSkin ?? 1
 
         });
 
@@ -334,6 +344,11 @@ function Competitions() {
 
                     loss:
                         Number(form.loss_points),
+
+                    skins: {
+                        enabled: Boolean(form.skins_enabled),
+                        pointsPerSkin: Number(form.points_per_skin) || 1
+                    },
 
                     points_type:
                         "match_points"
@@ -1007,6 +1022,39 @@ function Competitions() {
                                 </div>
 
                             </div>
+
+                            <hr className="my-4" />
+
+                            <div className="form-check form-switch mb-3">
+                                <input
+                                    className="form-check-input"
+                                    type="checkbox"
+                                    id="enableCompetitionSkins"
+                                    name="skins_enabled"
+                                    checked={Boolean(form.skins_enabled)}
+                                    onChange={e => setForm(prev => ({ ...prev, skins_enabled: e.target.checked }))}
+                                />
+                                <label className="form-check-label fw-semibold" htmlFor="enableCompetitionSkins">
+                                    Enable Skins Competition
+                                </label>
+                            </div>
+
+                            {form.skins_enabled && (
+                                <div className="row">
+                                    <div className="col-md-4">
+                                        <label className="form-label fw-semibold">Points Per Skin</label>
+                                        <input
+                                            type="number"
+                                            name="points_per_skin"
+                                            min="1"
+                                            step="1"
+                                            className="form-control"
+                                            value={form.points_per_skin}
+                                            onChange={handleChange}
+                                        />
+                                    </div>
+                                </div>
+                            )}
 
                         </div>
 

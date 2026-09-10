@@ -2,6 +2,22 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabaseClient";
 import { getPlayerDisplayName } from "../../utils/playerDisplay";
+
+function getSectionByeTeam(section, roundNumber) {
+    const roundMatches = (section?.matches || []).filter(
+        match => (match.round?.round_number || 0) === Number(roundNumber)
+    );
+
+    if (!roundMatches.length || !(section?.teams || []).length) return null;
+
+    const playingTeamIds = new Set();
+    roundMatches.forEach(match => {
+        if (match.team_a_id) playingTeamIds.add(match.team_a_id);
+        if (match.team_b_id) playingTeamIds.add(match.team_b_id);
+    });
+
+    return (section.teams || []).find(team => !playingTeamIds.has(team.id)) || null;
+}
 import { generateCompetitionDrawProposal } from "./competitionDrawEngine";
 import { buildCompetitionScheduleProposal } from "./competitionScheduleEngine";
 import CompetitionLiveCard from "./CompetitionLiveCard";
@@ -31,7 +47,7 @@ function CompetitionWorkspace() {
 
     // Results / live scoring state.
     const [selectedMatch, setSelectedMatch] = useState(null);
-    const [resultForm, setResultForm] = useState({ score_a: "", score_b: "" });
+    const [resultForm, setResultForm] = useState({ score_a: "", score_b: "", skins_a: "", skins_b: "" });
     const [savingResult, setSavingResult] = useState(false);
     const [resultSavedMessage, setResultSavedMessage] = useState("");
     const [savingSchedule, setSavingSchedule] = useState(false);
@@ -398,7 +414,7 @@ function CompetitionWorkspace() {
 
         const matchesResult = await supabase
             .from("competition_matches")
-            .select("id, competition_id, round_id, section_id, match_number, team_a_id, team_b_id, score_a, score_b, completed, next_match_id, next_match_slot")
+            .select("id, competition_id, round_id, section_id, match_number, team_a_id, team_b_id, score_a, score_b, skins_a, skins_b, completed, next_match_id, next_match_slot")
             .eq("competition_id", competitionId);
 
         if (matchesResult.error) {
@@ -786,14 +802,16 @@ function CompetitionWorkspace() {
         setSelectedMatch(match);
         setResultForm({
             score_a: match.score_a ?? "",
-            score_b: match.score_b ?? ""
+            score_b: match.score_b ?? "",
+            skins_a: match.skins_a ?? "",
+            skins_b: match.skins_b ?? ""
         });
     };
 
     const closeResultEditor = () => {
         if (savingResult) return;
         setSelectedMatch(null);
-        setResultForm({ score_a: "", score_b: "" });
+        setResultForm({ score_a: "", score_b: "", skins_a: "", skins_b: "" });
     };
 
     const getMatchTeamName = (match, side) => {
@@ -822,6 +840,7 @@ function CompetitionWorkspace() {
                 wins: 0,
                 draws: 0,
                 losses: 0,
+                skinsWon: 0,
                 points: 0,
                 shotsFor: 0,
                 shotsAgainst: 0,
@@ -836,14 +855,22 @@ function CompetitionWorkspace() {
                 row.played += 1;
                 row.shotsFor += sf;
                 row.shotsAgainst += sa;
+                if (competition.scoring?.skins?.enabled) {
+                    row.skinsWon += Number(isA ? match.skins_a : match.skins_b) || 0;
+                }
                 if (sf > sa) {
                     row.wins += 1;
-                    row.points += 2;
+                    row.points += Number(competition.scoring?.win ?? 2);
                 } else if (sf === sa) {
                     row.draws += 1;
-                    row.points += 1;
+                    row.points += Number(competition.scoring?.draw ?? 1);
                 } else {
                     row.losses += 1;
+                }
+
+                if (competition.scoring?.skins?.enabled) {
+                    const skinCount = Number(isA ? match.skins_a : match.skins_b) || 0;
+                    row.points += skinCount * Number(competition.scoring?.skins?.pointsPerSkin ?? 1);
                 }
             });
 
@@ -872,6 +899,7 @@ function CompetitionWorkspace() {
                 wins: 0,
                 draws: 0,
                 losses: 0,
+                skinsWon: 0,
                 points: 0,
                 shotsFor: 0,
                 shotsAgainst: 0,
@@ -886,14 +914,22 @@ function CompetitionWorkspace() {
                 row.played += 1;
                 row.shotsFor += sf;
                 row.shotsAgainst += sa;
+                if (competition.scoring?.skins?.enabled) {
+                    row.skinsWon += Number(isA ? match.skins_a : match.skins_b) || 0;
+                }
                 if (sf > sa) {
                     row.wins += 1;
-                    row.points += 2;
+                    row.points += Number(competition.scoring?.win ?? 2);
                 } else if (sf === sa) {
                     row.draws += 1;
-                    row.points += 1;
+                    row.points += Number(competition.scoring?.draw ?? 1);
                 } else {
                     row.losses += 1;
+                }
+
+                if (competition.scoring?.skins?.enabled) {
+                    const skinCount = Number(isA ? match.skins_a : match.skins_b) || 0;
+                    row.points += skinCount * Number(competition.scoring?.skins?.pointsPerSkin ?? 1);
                 }
             });
 
@@ -965,9 +1001,17 @@ function CompetitionWorkspace() {
 
         const scoreA = Number(resultForm.score_a);
         const scoreB = Number(resultForm.score_b);
+        const skinsA = competition?.scoring?.skins?.enabled ? Number(resultForm.skins_a) : null;
+        const skinsB = competition?.scoring?.skins?.enabled ? Number(resultForm.skins_b) : null;
 
         if (!Number.isInteger(scoreA) || !Number.isInteger(scoreB) || scoreA < 0 || scoreB < 0) {
             alert("Please enter valid non-negative whole-number scores for both teams.");
+            return;
+        }
+
+        if (competition?.scoring?.skins?.enabled &&
+            (!Number.isInteger(skinsA) || !Number.isInteger(skinsB) || skinsA < 0 || skinsB < 0)) {
+            alert("Please enter valid non-negative whole-number skin scores for both teams.");
             return;
         }
 
@@ -983,14 +1027,19 @@ function CompetitionWorkspace() {
                 return;
             }
 
-            const pointsA = scoreA > scoreB ? 2 : scoreA === scoreB ? 1 : 0;
-            const pointsB = scoreB > scoreA ? 2 : scoreA === scoreB ? 1 : 0;
+            const winPoints = Number(competition?.scoring?.win ?? 2);
+            const drawPoints = Number(competition?.scoring?.draw ?? (winPoints / 2));
+            const lossPoints = Number(competition?.scoring?.loss ?? 0);
+            const pointsA = scoreA > scoreB ? winPoints : scoreA === scoreB ? drawPoints : lossPoints;
+            const pointsB = scoreB > scoreA ? winPoints : scoreA === scoreB ? drawPoints : lossPoints;
 
             const { error } = await supabase
                 .from("competition_matches")
                 .update({
                     score_a: scoreA,
                     score_b: scoreB,
+                    skins_a: skinsA,
+                    skins_b: skinsB,
                     points_a: pointsA,
                     points_b: pointsB,
                     shots_for_a: scoreA,
@@ -1009,7 +1058,7 @@ function CompetitionWorkspace() {
             // have no Final round at all.
             const refreshedMatchesResult = await supabase
                 .from("competition_matches")
-                .select("id, competition_id, round_id, section_id, match_number, team_a_id, team_b_id, score_a, score_b, points_a, points_b, shots_for_a, shots_for_b, completed, completed_at, next_match_id, next_match_slot")
+                .select("id, competition_id, round_id, section_id, match_number, team_a_id, team_b_id, score_a, score_b, skins_a, skins_b, points_a, points_b, shots_for_a, shots_for_b, completed, completed_at, next_match_id, next_match_slot")
                 .eq("competition_id", competitionId);
 
             if (refreshedMatchesResult.error) throw refreshedMatchesResult.error;
@@ -1049,7 +1098,7 @@ function CompetitionWorkspace() {
             if (bracketChanged) {
                 const latestMatchesResult = await supabase
                     .from("competition_matches")
-                    .select("id, competition_id, round_id, section_id, match_number, team_a_id, team_b_id, score_a, score_b, points_a, points_b, shots_for_a, shots_for_b, completed, completed_at, next_match_id, next_match_slot")
+                    .select("id, competition_id, round_id, section_id, match_number, team_a_id, team_b_id, score_a, score_b, skins_a, skins_b, points_a, points_b, shots_for_a, shots_for_b, completed, completed_at, next_match_id, next_match_slot")
                     .eq("competition_id", competitionId);
 
                 if (latestMatchesResult.error) throw latestMatchesResult.error;
@@ -1084,7 +1133,7 @@ function CompetitionWorkspace() {
 
             setCompetition(prev => prev ? { ...prev, status: newCompetitionStatus } : prev);
             setSelectedMatch(null);
-            setResultForm({ score_a: "", score_b: "" });
+            setResultForm({ score_a: "", score_b: "", skins_a: "", skins_b: "" });
             setResultSavedMessage("Result saved successfully.");
             window.setTimeout(() => setResultSavedMessage(""), 1800);
         } catch (error) {
@@ -2196,6 +2245,8 @@ function CompetitionWorkspace() {
                             team_b_id: match.teamBId,
                             score_a: null,
                             score_b: null,
+                            skins_a: null,
+                            skins_b: null,
                             points_a: null,
                             points_b: null,
                             shots_for_a: null,
@@ -3800,7 +3851,7 @@ function CompetitionWorkspace() {
                                         return <div className="border rounded p-3 mb-3" key={section.id}>
                                             <div className="d-flex justify-content-between align-items-center mb-3"><strong>{section.section_name}</strong><span className="badge bg-secondary">{section.teams.length} teams</span></div>
                                             <div className="row g-2 mb-3">{section.teams.map(team=><div className="col-md-6" key={team.id}><div className="small border rounded px-2 py-1 bg-light"><TeamDisplay team={team} />{team.clubs?.name && <span className="text-muted"> — {team.clubs.name}</span>}</div></div>)}</div>
-                                            {roundNumbers.map(n=><div className="mb-3" key={n}><div className="fw-semibold small mb-2">Sectional Round {n}</div><div className="table-responsive"><table className="table table-sm table-bordered mb-0"><tbody>{section.matches.filter(m=>m.round?.round_number===n).sort((a,b)=>a.match_number-b.match_number).map(m=><tr key={m.id}><td>{m.teamA ? <TeamDisplay team={m.teamA} /> : "TBC"}</td><td className="text-center fw-semibold">vs</td><td>{m.teamB ? <TeamDisplay team={m.teamB} /> : "TBC"}</td></tr>)}</tbody></table></div></div>)}
+                                            {roundNumbers.map(n=>{ const roundMatches=section.matches.filter(m=>m.round?.round_number===n).sort((a,b)=>a.match_number-b.match_number); const byeTeam=getSectionByeTeam(section,n); return <div className="mb-3" key={n}><div className="fw-semibold small mb-2">Sectional Round {n}</div><div className="table-responsive"><table className="table table-sm table-bordered mb-0"><tbody>{roundMatches.map(m=><tr key={m.id}><td>{m.teamA ? <TeamDisplay team={m.teamA} /> : "TBC"}</td><td className="text-center fw-semibold">vs</td><td>{m.teamB ? <TeamDisplay team={m.teamB} /> : "TBC"}</td></tr>)}{byeTeam && <tr className="table-warning"><td className="fw-semibold"><TeamDisplay team={byeTeam} /></td><td className="text-center fw-semibold">—</td><td className="fw-semibold">BYE</td></tr>}</tbody></table></div></div>;})}
                                         </div>;
                                     })}
                                 </div></div>
@@ -4513,7 +4564,7 @@ function CompetitionWorkspace() {
                                                         <th>Team A</th>
                                                         <th className="text-center" style={{ width: "60px" }}>vs</th>
                                                         <th>Team B</th>
-                                                        <th className="text-center" style={{ width: "120px" }}>Result</th>
+                                                        <th className="text-center" style={{ width: "145px" }}>Result</th>
                                                         <th className="text-end" style={{ width: "150px" }}>Status</th>
                                                     </tr>
                                                 </thead>
@@ -4661,7 +4712,7 @@ function CompetitionWorkspace() {
                                                                                                     <th>Team A</th>
                                                                                                     <th className="text-center" style={{ width: "50px" }}>vs</th>
                                                                                                     <th>Team B</th>
-                                                                                                    <th className="text-center" style={{ width: "120px" }}>Result</th>
+                                                                                                    <th className="text-center" style={{ width: "145px" }}>Result</th>
                                                                                                     <th className="text-end" style={{ width: "150px" }}>Status</th>
                                                                                                 </tr>
                                                                                             </thead>
@@ -4673,9 +4724,20 @@ function CompetitionWorkspace() {
                                                                                                         <td className="text-center text-muted">vs</td>
                                                                                                         <td>{getTeamLabel(match, "b")}</td>
                                                                                                         <td className="text-center fw-semibold">
-                                                                                                            {match.score_a !== null && match.score_a !== undefined && match.score_b !== null && match.score_b !== undefined
-                                                                                                                ? `${match.score_a} — ${match.score_b}`
-                                                                                                                : "—"}
+                                                                                                            {match.score_a !== null && match.score_a !== undefined && match.score_b !== null && match.score_b !== undefined ? (
+                                                                                                                <div className="bowlpoint-result-display">
+                                                                                                                    <div className="bowlpoint-result-score">
+                                                                                                                        {match.score_a} <span className="bowlpoint-result-separator">—</span> {match.score_b}
+                                                                                                                    </div>
+                                                                                                                    {competition?.scoring?.skins?.enabled && (
+                                                                                                                        <div className="bowlpoint-result-skins">
+                                                                                                                            <span>{match.skins_a ?? 0} {Number(match.skins_a ?? 0) === 1 ? "skin" : "skins"}</span>
+                                                                                                                            <span className="bowlpoint-result-skins-separator">—</span>
+                                                                                                                            <span>{match.skins_b ?? 0} {Number(match.skins_b ?? 0) === 1 ? "skin" : "skins"}</span>
+                                                                                                                        </div>
+                                                                                                                    )}
+                                                                                                                </div>
+                                                                                                            ) : "—"}
                                                                                                         </td>
                                                                                                         <td className="text-end">
                                                                                                             {match.completed ? (
@@ -4686,6 +4748,19 @@ function CompetitionWorkspace() {
                                                                                                         </td>
                                                                                                     </tr>
                                                                                                 ))}
+                                                                                                {(() => {
+                                                                                                    const byeTeam = getSectionByeTeam(section, roundNumber);
+                                                                                                    return byeTeam ? (
+                                                                                                        <tr key={`bye-${section.id}-${roundNumber}`} className="table-warning">
+                                                                                                            <td className="fw-semibold">—</td>
+                                                                                                            <td className="fw-semibold">{getTeamLabel({ teamA: byeTeam }, "a")}</td>
+                                                                                                            <td className="text-center">—</td>
+                                                                                                            <td className="fw-semibold">BYE</td>
+                                                                                                            <td className="text-center fw-semibold">—</td>
+                                                                                                            <td className="text-end"><span className="badge bg-warning text-dark">BYE</span></td>
+                                                                                                        </tr>
+                                                                                                    ) : null;
+                                                                                                })()}
                                                                                             </tbody>
                                                                                         </table>
                                                                                     </div>
@@ -4758,6 +4833,7 @@ function CompetitionWorkspace() {
                                                                                 <th className="text-center">W</th>
                                                                                 <th className="text-center">D</th>
                                                                                 <th className="text-center">L</th>
+                                                                                {competition?.scoring?.skins?.enabled && <th className="text-center">Skins</th>}
                                                                                 <th className="text-center">Pts</th>
                                                                                 <th className="text-center">Agg</th>
                                                                             </tr>
@@ -4771,6 +4847,7 @@ function CompetitionWorkspace() {
                                                                                     <td className="text-center">{row.wins}</td>
                                                                                     <td className="text-center">{row.draws}</td>
                                                                                     <td className="text-center">{row.losses}</td>
+                                                                                    {competition?.scoring?.skins?.enabled && <td className="text-center">{row.skinsWon}</td>}
                                                                                     <td className="text-center fw-bold">{row.points}</td>
                                                                                     <td className="text-center">{row.aggregate > 0 ? `+${row.aggregate}` : row.aggregate}</td>
                                                                                 </tr>
@@ -4828,35 +4905,44 @@ function CompetitionWorkspace() {
                                         {selectedMatch.round?.round_name || "Match"} • Match {selectedMatch.match_number}
                                     </div>
                                     <div className="row g-3 align-items-end">
-                                        <div className="col-5">
+                                        <div className={competition?.scoring?.skins?.enabled ? "col-5" : "col-5"}>
                                             <label className="form-label fw-semibold">{getMatchTeamName(selectedMatch, "a")}</label>
                                             <input
-                                                type="number"
-                                                min="0"
-                                                step="1"
+                                                type="number" min="0" step="1"
                                                 className="form-control form-control-lg text-center"
                                                 value={resultForm.score_a}
                                                 onChange={e => setResultForm(prev => ({ ...prev, score_a: e.target.value }))}
-                                                autoFocus
-                                                required
+                                                autoFocus required
                                             />
+                                            {competition?.scoring?.skins?.enabled && (
+                                                <div className="mt-2">
+                                                    <label className="form-label small fw-semibold mb-1">Skins</label>
+                                                    <input type="number" min="0" step="1" className="form-control text-center" value={resultForm.skins_a} onChange={e => setResultForm(prev => ({ ...prev, skins_a: e.target.value }))} required />
+                                                </div>
+                                            )}
                                         </div>
                                         <div className="col-2 text-center pb-2 fw-bold">VS</div>
                                         <div className="col-5">
                                             <label className="form-label fw-semibold">{getMatchTeamName(selectedMatch, "b")}</label>
                                             <input
-                                                type="number"
-                                                min="0"
-                                                step="1"
+                                                type="number" min="0" step="1"
                                                 className="form-control form-control-lg text-center"
                                                 value={resultForm.score_b}
                                                 onChange={e => setResultForm(prev => ({ ...prev, score_b: e.target.value }))}
                                                 required
                                             />
+                                            {competition?.scoring?.skins?.enabled && (
+                                                <div className="mt-2">
+                                                    <label className="form-label small fw-semibold mb-1">Skins</label>
+                                                    <input type="number" min="0" step="1" className="form-control text-center" value={resultForm.skins_b} onChange={e => setResultForm(prev => ({ ...prev, skins_b: e.target.value }))} required />
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                     <div className="alert alert-light border mt-3 mb-0 small">
-                                        Win = 2 points, Draw = 1 point, Loss = 0 points. Aggregate is calculated from total Shots For minus Shots Against.
+                                        Win = {competition?.scoring?.win ?? 2} points, Draw = {competition?.scoring?.draw ?? 1} points, Loss = {competition?.scoring?.loss ?? 0} points.
+                                        {competition?.scoring?.skins?.enabled ? ` Each skin is worth ${competition.scoring.skins.pointsPerSkin ?? 1} additional point(s).` : ""}
+                                        {" "}Aggregate is calculated from total Shots For minus Shots Against.
                                     </div>
                                 </div>
                                 <div className="modal-footer">

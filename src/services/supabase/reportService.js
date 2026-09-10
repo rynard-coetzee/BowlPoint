@@ -46,7 +46,7 @@ export async function getCompetitionReportData(competitionId) {
 
         supabase
             .from("competition_matches")
-            .select("id, competition_id, round_id, section_id, match_number, team_a_id, team_b_id, score_a, score_b, points_a, points_b, shots_for_a, shots_for_b, completed, completed_at")
+            .select("id, competition_id, round_id, section_id, match_number, team_a_id, team_b_id, score_a, score_b, skins_a, skins_b, points_a, points_b, shots_for_a, shots_for_b, completed, completed_at")
             .eq("competition_id", competitionId)
             .order("match_number"),
 

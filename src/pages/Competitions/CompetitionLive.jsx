@@ -1,12 +1,30 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabaseClient";
 import { getPlayerDisplayName } from "../../utils/playerDisplay";
+
+function getSectionByeTeam(section, round, matches) {
+    const roundMatches = (matches || []).filter(
+        match => match.section_id === section?.id && match.round_id === round?.id
+    );
+
+    if (!roundMatches.length || !(section?.teams || []).length) return null;
+
+    const playingTeamIds = new Set();
+    roundMatches.forEach(match => {
+        if (match.team_a_id) playingTeamIds.add(match.team_a_id);
+        if (match.team_b_id) playingTeamIds.add(match.team_b_id);
+    });
+
+    return (section.teams || []).find(team => !playingTeamIds.has(team.id)) || null;
+}
 
 function calculateStandings(section, matches, scoring) {
     const winPoints = Number(scoring?.win ?? 2);
     const drawPoints = Number(scoring?.draw ?? 1);
     const lossPoints = Number(scoring?.loss ?? 0);
+    const skinsEnabled = Boolean(scoring?.skins?.enabled);
+    const pointsPerSkin = Number(scoring?.skins?.pointsPerSkin ?? 1);
 
     return (section.teams || []).map(team => {
         const row = {
@@ -15,6 +33,7 @@ function calculateStandings(section, matches, scoring) {
             wins: 0,
             draws: 0,
             losses: 0,
+            skinsWon: 0,
             points: 0,
             shotsFor: 0,
             shotsAgainst: 0,
@@ -33,6 +52,12 @@ function calculateStandings(section, matches, scoring) {
                 row.played += 1;
                 row.shotsFor += sf;
                 row.shotsAgainst += sa;
+
+                const skins = Number(isA ? match.skins_a : match.skins_b) || 0;
+                if (skinsEnabled) {
+                    row.skinsWon += skins;
+                    row.points += skins * pointsPerSkin;
+                }
 
                 if (sf > sa) {
                     row.wins += 1;
@@ -145,7 +170,7 @@ function CompetitionLive() {
                 .order("section_number"),
             supabase
                 .from("competition_matches")
-                .select("id, competition_id, round_id, section_id, match_number, team_a_id, team_b_id, score_a, score_b, completed, completed_at, next_match_id, next_match_slot")
+                .select("id, competition_id, round_id, section_id, match_number, team_a_id, team_b_id, score_a, score_b, skins_a, skins_b, completed, completed_at, next_match_id, next_match_slot")
                 .eq("competition_id", competitionId)
                 .order("match_number")
         ]);
@@ -525,6 +550,7 @@ function CompetitionLive() {
                                                             <th style={{ width: 42 }}>#</th>
                                                             <th>Team</th>
                                                             <th className="text-center">P</th>
+                                                            {competition.scoring?.skins?.enabled && <th className="text-center">Skins</th>}
                                                             <th className="text-center">Pts</th>
                                                             <th className="text-center">Agg</th>
                                                         </tr>
@@ -537,6 +563,7 @@ function CompetitionLive() {
                                                                     <div className="fw-semibold"><TeamDisplay team={row.team} /></div>
                                                                 </td>
                                                                 <td className="text-center">{row.played}</td>
+                                                                {competition.scoring?.skins?.enabled && <td className="text-center">{row.skinsWon}</td>}
                                                                 <td className="text-center fw-bold">{row.points}</td>
                                                                 <td className="text-center">{row.aggregate > 0 ? `+${row.aggregate}` : row.aggregate}</td>
                                                             </tr>
@@ -586,20 +613,56 @@ function CompetitionLive() {
                                                     </tr>
                                                 </thead>
                                                 <tbody>
-                                                    {sectionMatches.map(match => (
-                                                        <tr key={match.id}>
-                                                            <td className="small">{match.round?.round_name || `Round ${match.round?.round_number || ""}`}</td>
-                                                            <td className="small">#{match.match_number}</td>
-                                                            <td className="text-end fw-semibold"><TeamDisplay team={match.teamA} /></td>
-                                                            <td className="text-center fw-bold">{match.completed ? `${match.score_a} — ${match.score_b}` : "vs"}</td>
-                                                            <td className="fw-semibold"><TeamDisplay team={match.teamB} /></td>
-                                                            <td className="text-end">
-                                                                <span className={`badge ${match.completed ? "bg-success" : match.team_a_id && match.team_b_id ? "bg-primary" : "bg-secondary"}`}>
-                                                                    {match.completed ? "Final" : match.team_a_id && match.team_b_id ? "Scheduled" : "TBD"}
-                                                                </span>
-                                                            </td>
-                                                        </tr>
-                                                    ))}
+                                                    {sectionMatches.map((match, index) => {
+                                                        const isLastMatchOfRound =
+                                                            index === sectionMatches.length - 1 ||
+                                                            sectionMatches[index + 1]?.round?.id !== match.round?.id;
+                                                        const byeTeam = isLastMatchOfRound
+                                                            ? getSectionByeTeam(section, match.round, matches)
+                                                            : null;
+
+                                                        return (
+                                                            <Fragment key={match.id}>
+                                                                <tr>
+                                                                    <td className="small">{match.round?.round_name || `Round ${match.round?.round_number || ""}`}</td>
+                                                                    <td className="small">#{match.match_number}</td>
+                                                                    <td className="text-end fw-semibold"><TeamDisplay team={match.teamA} /></td>
+                                                                    <td className="text-center fw-bold">
+                                                                        {match.completed ? (
+                                                                            <div className="bowlpoint-result-display">
+                                                                                <div className="bowlpoint-result-score">
+                                                                                    {match.score_a} <span className="bowlpoint-result-separator">—</span> {match.score_b}
+                                                                                </div>
+                                                                                {competition?.scoring?.skins?.enabled && (
+                                                                                    <div className="bowlpoint-result-skins">
+                                                                                        <span>{match.skins_a ?? 0} {Number(match.skins_a ?? 0) === 1 ? "skin" : "skins"}</span>
+                                                                                        <span className="bowlpoint-result-skins-separator">—</span>
+                                                                                        <span>{match.skins_b ?? 0} {Number(match.skins_b ?? 0) === 1 ? "skin" : "skins"}</span>
+                                                                                    </div>
+                                                                                )}
+                                                                            </div>
+                                                                        ) : "vs"}
+                                                                    </td>
+                                                                    <td className="fw-semibold"><TeamDisplay team={match.teamB} /></td>
+                                                                    <td className="text-end">
+                                                                        <span className={`badge ${match.completed ? "bg-success" : match.team_a_id && match.team_b_id ? "bg-primary" : "bg-secondary"}`}>
+                                                                            {match.completed ? "Final" : match.team_a_id && match.team_b_id ? "Scheduled" : "TBD"}
+                                                                        </span>
+                                                                    </td>
+                                                                </tr>
+                                                                {byeTeam && (
+                                                                    <tr key={`bye-${section.id}-${match.round_id}`} className="table-warning">
+                                                                        <td className="small">{match.round?.round_name || `Round ${match.round?.round_number || ""}`}</td>
+                                                                        <td className="small">—</td>
+                                                                        <td className="text-end fw-semibold"><TeamDisplay team={byeTeam} /></td>
+                                                                        <td className="text-center fw-bold">—</td>
+                                                                        <td className="fw-semibold">BYE</td>
+                                                                        <td className="text-end"><span className="badge bg-warning text-dark">BYE</span></td>
+                                                                    </tr>
+                                                                )}
+                                                            </Fragment>
+                                                        );
+                                                    })}
                                                 </tbody>
                                             </table>
                                         </div>
