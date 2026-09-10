@@ -205,7 +205,9 @@ function Reports() {
                 b.points - a.points ||
                 b.aggregate - a.aggregate ||
                 b.shotsFor - a.shotsFor ||
-                a.team.team_name.localeCompare(b.team.team_name)
+                getTeamLabel(a.team, reportData.teams).localeCompare(
+                    getTeamLabel(b.team, reportData.teams)
+                )
             );
     }, [reportData]);
 
