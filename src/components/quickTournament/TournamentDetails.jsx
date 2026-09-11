@@ -117,11 +117,55 @@ function TournamentDetails({
 
                     </div>
 
-                    <small className="text-muted d-block mt-2">
-                        Round 1 is random. After each round is completed,
-                        the next round is generated from the standings while
-                        avoiding repeat opponents whenever possible.
-                    </small>
+                    {tournament.scoring.drawMode === "strength" && (
+                        <>
+                            <div className="mt-3">
+                                <label className="form-label fw-semibold">
+                                    Strength vs Strength Rounds
+                                </label>
+
+                                <select
+                                    className="form-select"
+                                    value={
+                                        tournament.scoring.strengthRounds ||
+                                        Math.max(1, tournament.totalRounds - 1)
+                                    }
+                                    onChange={(e) =>
+                                        updateScoring(
+                                            "strengthRounds",
+                                            Number(e.target.value)
+                                        )
+                                    }
+                                >
+                                    {Array.from(
+                                        {
+                                            length: Math.max(1, tournament.totalRounds - 1)
+                                        },
+                                        (_, index) => {
+                                            const rounds = index + 1;
+                                            const randomRounds = tournament.totalRounds - rounds;
+
+                                            return (
+                                                <option key={rounds} value={rounds}>
+                                                    {rounds} strength vs strength {rounds === 1 ? "round" : "rounds"} — first {randomRounds} {randomRounds === 1 ? "round" : "rounds"} random
+                                                </option>
+                                            );
+                                        }
+                                    )}
+                                </select>
+                            </div>
+
+                            <small className="text-muted d-block mt-2">
+                                The first rounds are blind random draws. The selected number of final rounds are generated from the standings while avoiding repeat opponents whenever possible.
+                            </small>
+                        </>
+                    )}
+
+                    {tournament.scoring.drawMode !== "strength" && (
+                        <small className="text-muted d-block mt-2">
+                            All rounds use the standard round-robin draw.
+                        </small>
+                    )}
 
                 </div>
 

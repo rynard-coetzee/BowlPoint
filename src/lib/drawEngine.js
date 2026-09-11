@@ -41,9 +41,33 @@ export function generateRoundRobinDraw(tournament) {
 export function generateStrengthDraw(tournament) {
 
     const generatedTournament = structuredClone(tournament);
-    const firstRound = createRandomRound(generatedTournament.teams, 1);
 
-    generatedTournament.rounds = [firstRound];
+    const strengthRounds = Math.min(
+        Math.max(1, Number(
+            generatedTournament.scoring.strengthRounds ||
+            generatedTournament.totalRounds - 1
+        )),
+        Math.max(1, generatedTournament.totalRounds - 1)
+    );
+
+    const randomRounds =
+        Math.max(1, generatedTournament.totalRounds - strengthRounds);
+
+    /*
+     * Blind random rounds are all generated up front. The remaining final
+     * rounds are generated dynamically from the standings once the random
+     * phase is complete.
+     */
+    generatedTournament.rounds = Array.from(
+        { length: randomRounds },
+        (_, index) =>
+            createRandomRound(
+                generatedTournament.teams,
+                index + 1
+            )
+    );
+
+    generatedTournament.scoring.strengthRounds = strengthRounds;
     generatedTournament.status = "generated";
 
     return generatedTournament;
