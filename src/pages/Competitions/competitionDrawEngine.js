@@ -26,8 +26,8 @@
  * Midweek – One Day scheduling:
  * - One round per playing day, potentially over many weeks.
  *
- * Week scheduling:
- * - Weekdays only, with up to 3 rounds per playing day.
+ * Weekday scheduling:
+ * - Monday–Friday only, with up to 3 rounds per playing day.
  */
 
 const MIN_SECTION_SIZE = 3;
@@ -148,7 +148,7 @@ function getScheduleSummary({
         };
     }
 
-    if (competitionType === "week") {
+    if (competitionType === "weekday" || competitionType === "week") {
         const playingDays = Math.ceil(totalRounds / 3);
 
         return {
@@ -156,8 +156,8 @@ function getScheduleSummary({
             sectionalPlayingDays: Math.ceil(sectionalRounds / 3),
             playoffPlayingDays: Math.ceil(playoffRounds / 3),
             minimumPlayingDays: playingDays,
-            preferredPattern: "Up to 3 rounds per weekday playing day",
-            normalSchedule: `${playingDays} playing day(s) required at up to 3 rounds per weekday.`,
+            preferredPattern: "Up to 3 rounds per Monday–Friday playing day",
+            normalSchedule: `${playingDays} playing day(s) required at up to 3 rounds per Monday–Friday playing day.`,
             weekendCount: null,
             overflow: false,
             notes: [

@@ -4,7 +4,7 @@
  * This is a proposal-only engine. It does not write dates or venues.
  * Rules supplied by the competition secretary:
  *   Midweek – One Day: one round per playing day, potentially over many weeks.
- *   Week: weekday competition, maximum 3 rounds per playing day.
+ *   Weekday: weekday competition, maximum 3 rounds per playing day.
  *   Weekend: maximum 3 rounds Saturday + 3 rounds Sunday.
  *   If the complete playoff stage does not fit in the remaining Sunday
  *   capacity, move the whole playoff stage to the next available Saturday.
@@ -61,7 +61,7 @@ export function buildCompetitionScheduleProposal({ competitionType = "weekend", 
         };
     }
 
-    if (competitionType === "week") {
+    if (competitionType === "weekday" || competitionType === "week") {
         const days = [];
 
         // Week competitions may use any weekday and can play up to 3 rounds
@@ -70,9 +70,9 @@ export function buildCompetitionScheduleProposal({ competitionType = "weekend", 
             const dayRounds = orderedRounds.slice(index, index + 3);
 
             days.push({
-                key: `week-${days.length + 1}`,
+                key: `weekday-${days.length + 1}`,
                 label: `Playing Day ${days.length + 1}`,
-                typeLabel: "Week — up to 3 rounds",
+                typeLabel: "Weekday — up to 3 rounds",
                 rounds: dayRounds.map(round => ({
                     roundNumber: round.round_number,
                     roundName: round.round_name,
@@ -95,41 +95,66 @@ export function buildCompetitionScheduleProposal({ competitionType = "weekend", 
     let weekendNumber = 1;
     let sectionalIndex = 0;
 
-    // Put sectional rounds into weekend blocks: 3 Saturday, then up to 3 Sunday.
+    // Put sectional rounds into weekend blocks: up to 3 on Saturday, then
+    // up to 3 on Sunday only when Sunday actually has rounds scheduled.
+    // A tournament that fits entirely on Saturday must not create an empty
+    // Sunday playing day or require the secretary to assign a Sunday date.
     while (sectionalIndex < sectional.length) {
         const saturdayRounds = sectional.slice(sectionalIndex, sectionalIndex + 3);
         sectionalIndex += saturdayRounds.length;
-        days.push({
-            key: `weekend-${weekendNumber}-sat`,
-            label: `Weekend ${weekendNumber} — Saturday`,
-            typeLabel: "Maximum 3 rounds",
-            rounds: saturdayRounds.map(round => ({
-                roundNumber: round.round_number,
-                roundName: round.round_name,
-                matchCount: countMatches(round)
-            }))
-        });
+
+        if (saturdayRounds.length) {
+            days.push({
+                key: `weekend-${weekendNumber}-sat`,
+                label: `Weekend ${weekendNumber} — Saturday`,
+                typeLabel: "Maximum 3 rounds",
+                rounds: saturdayRounds.map(round => ({
+                    roundNumber: round.round_number,
+                    roundName: round.round_name,
+                    matchCount: countMatches(round)
+                }))
+            });
+        }
 
         const sundayRounds = sectional.slice(sectionalIndex, sectionalIndex + 3);
         sectionalIndex += sundayRounds.length;
-        days.push({
-            key: `weekend-${weekendNumber}-sun`,
-            label: `Weekend ${weekendNumber} — Sunday`,
-            typeLabel: "Maximum 3 rounds",
-            rounds: sundayRounds.map(round => ({
-                roundNumber: round.round_number,
-                roundName: round.round_name,
-                matchCount: countMatches(round)
-            }))
-        });
+
+        if (sundayRounds.length) {
+            days.push({
+                key: `weekend-${weekendNumber}-sun`,
+                label: `Weekend ${weekendNumber} — Sunday`,
+                typeLabel: "Maximum 3 rounds",
+                rounds: sundayRounds.map(round => ({
+                    roundNumber: round.round_number,
+                    roundName: round.round_name,
+                    matchCount: countMatches(round)
+                }))
+            });
+        }
 
         weekendNumber += 1;
     }
 
     // If playoffs fit into unused Sunday capacity on the final sectional weekend,
-    // keep them there. Otherwise move the complete playoff stage to the next Saturday.
+    // keep them there. If the sectional stage used only Saturday, create Sunday
+    // now because the playoff rounds genuinely require it. Otherwise move the
+    // complete playoff stage to the next Saturday.
     if (playoffs.length) {
-        const finalSunday = days[days.length - 1];
+        const finalWeekendNumber = Math.max(1, weekendNumber - 1);
+        let finalSunday = days.find(day =>
+            day.key === `weekend-${finalWeekendNumber}-sun`
+        );
+
+        if (!finalSunday) {
+            finalSunday = {
+                key: `weekend-${finalWeekendNumber}-sun`,
+                label: `Weekend ${finalWeekendNumber} — Sunday`,
+                typeLabel: "Maximum 3 rounds",
+                rounds: []
+            };
+            days.push(finalSunday);
+        }
+
         const freeSundaySlots = Math.max(0, 3 - finalSunday.rounds.length);
 
         if (playoffs.length <= freeSundaySlots) {
@@ -139,6 +164,13 @@ export function buildCompetitionScheduleProposal({ competitionType = "weekend", 
                 matchCount: countMatches(round)
             })));
         } else {
+            // Remove the empty Sunday we created above if the complete playoff
+            // stage cannot fit there; the whole playoff stage belongs on the
+            // next Saturday instead.
+            if (!finalSunday.rounds.length) {
+                days.splice(days.indexOf(finalSunday), 1);
+            }
+
             days.push({
                 key: `weekend-${weekendNumber}-sat-playoffs`,
                 label: `Weekend ${weekendNumber} — Saturday`,

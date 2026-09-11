@@ -36,7 +36,6 @@ function CompetitionWorkspace() {
 
     // Draw proposal state. This stage is deliberately local-only:
     // generating a proposal does NOT write sections, rounds or matches to Supabase.
-    const [drawType, setDrawType] = useState("weekend");
     const [drawProposal, setDrawProposal] = useState(null);
     const [showDrawPlanner, setShowDrawPlanner] = useState(false);
     const [generatingDraw, setGeneratingDraw] = useState(false);
@@ -462,7 +461,6 @@ function CompetitionWorkspace() {
         } : null);
 
         setCompetition(competitionResult.data);
-        setDrawType(competitionResult.data.schedule_type || "weekend");
         setClubs(clubsResult.data || []);
         setParticipatingClubs(participatingResult.data || []);
         setPlayers(playersResult.data || []);
@@ -604,7 +602,7 @@ function CompetitionWorkspace() {
         try {
             setScheduleProposal(
                 buildCompetitionScheduleProposal({
-                    competitionType: competition?.schedule_type || drawType,
+                    competitionType: competition?.schedule_type || "weekend",
                     rounds: confirmedDraw.rounds,
                     matches: confirmedDraw.matches || []
                 })
@@ -613,7 +611,7 @@ function CompetitionWorkspace() {
             console.error("Error building schedule proposal:", error);
             setScheduleProposal(null);
         }
-    }, [confirmedDraw, drawType, competition?.schedule_type]);
+    }, [confirmedDraw, competition?.schedule_type]);
 
     useEffect(() => {
         if (!scheduleProposal?.days?.length) {
@@ -2096,7 +2094,7 @@ function CompetitionWorkspace() {
         try {
             const proposal = generateCompetitionDrawProposal({
                 teams: activeTeams,
-                competitionType: drawType
+                competitionType: competition?.schedule_type || "weekend"
             });
 
             setDrawProposal(proposal);
@@ -3940,28 +3938,19 @@ function CompetitionWorkspace() {
                         <div className="row g-3 align-items-end mb-4">
 
                             <div className="col-md-5">
-
-                                <label className="form-label fw-semibold">
-
-                                    Competition Type
-
-                                </label>
-
-                                <select
-                                    className="form-select"
-                                    value={drawType}
-                                    onChange={e => {
-                                        setDrawType(e.target.value);
-                                        setDrawProposal(null);
-                                    }}
-                                >
-
-                                    <option value="weekend">Weekend Tournament</option>
-
-                                    <option value="midweek">Midweek Tournament</option>
-
-                                </select>
-
+                                <div className="border rounded p-3 bg-light h-100">
+                                    <div className="text-muted small">Schedule Type</div>
+                                    <div className="fw-semibold">
+                                        {competition?.schedule_type === "weekend"
+                                            ? "Weekend Tournament"
+                                            : competition?.schedule_type === "weekday" || competition?.schedule_type === "week"
+                                                ? "Weekday Tournament"
+                                                : "Midweek Tournament"}
+                                    </div>
+                                    <div className="small text-muted mt-1">
+                                        Taken from the tournament setup.
+                                    </div>
+                                </div>
                             </div>
 
 
@@ -4100,7 +4089,9 @@ function CompetitionWorkspace() {
 
                                         {drawProposal.recommendedPlan.schedule.competitionType === "weekend"
                                             ? `${drawProposal.recommendedPlan.schedule.saturdaySectionalRounds} sectional round(s) Saturday + ${drawProposal.recommendedPlan.schedule.sundaySectionalRounds} sectional round(s) Sunday, followed by ${drawProposal.recommendedPlan.schedule.playoffRoundsOnSunday} playoff round(s) where required.`
-                                            : `${drawProposal.recommendedPlan.totalRounds} playing day(s) required at one round per day.`}
+                                            : drawProposal.recommendedPlan.schedule.competitionType === "weekday" || drawProposal.recommendedPlan.schedule.competitionType === "week"
+                                                ? `${drawProposal.recommendedPlan.totalRounds} playing day(s) required at up to 3 rounds per day, Monday–Friday.`
+                                                : `${drawProposal.recommendedPlan.totalRounds} playing day(s) required at one round per day.`}
 
                                     </div>
 
@@ -4326,7 +4317,11 @@ function CompetitionWorkspace() {
                                 <div className="border rounded p-3 h-100">
                                     <div className="text-muted small">Tournament Type</div>
                                     <div className="fw-bold">
-                                        {scheduleProposal.competitionType === "weekend" ? "Weekend" : "Midweek"}
+                                        {scheduleProposal.competitionType === "weekend"
+                                            ? "Weekend"
+                                            : scheduleProposal.competitionType === "weekday" || scheduleProposal.competitionType === "week"
+                                                ? "Weekday"
+                                                : "Midweek"}
                                     </div>
                                 </div>
                             </div>
@@ -4354,6 +4349,12 @@ function CompetitionWorkspace() {
                             <div className="alert alert-info">
                                 <strong>Weekend rule:</strong> maximum 3 rounds Saturday and 3 rounds Sunday.
                                 Playoffs are placed on Sunday only when the complete playoff stage fits into the remaining Sunday capacity; otherwise the playoffs move to the next available Saturday.
+                            </div>
+                        )}
+
+                        {(scheduleProposal.competitionType === "weekday" || scheduleProposal.competitionType === "week") && (
+                            <div className="alert alert-info">
+                                <strong>Weekday rule:</strong> playing days may be scheduled Monday to Friday, with a maximum of 3 rounds per playing day.
                             </div>
                         )}
 

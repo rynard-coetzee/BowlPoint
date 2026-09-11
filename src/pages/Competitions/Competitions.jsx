@@ -135,14 +135,17 @@ function Competitions() {
                 competition.format || "fours",
 
             structure:
-                competition.structure || "sectional",
+                competition.structure === "round_robin"
+                    ? "sectional"
+                    : (competition.structure || "sectional"),
 
             section_mode:
-                competition.section_mode || (competition.structure === "round_robin" ? "none" : "multiple"),
+                competition.structure === "round_robin"
+                    ? "none"
+                    : (competition.section_mode || "multiple"),
 
             /*
-             * Schedule type is now stored explicitly so Week and Weekend
-             * can both use up to 3 rounds per playing day.
+             * Schedule type is stored explicitly.
              * Older competitions without schedule_type are migrated from
              * max_games_per_day: 1 = Midweek, otherwise Weekend.
              */
@@ -551,7 +554,7 @@ function Competitions() {
         const labels = {
 
             sectional: "Sectional",
-            round_robin: "Round Robin",
+            round_robin: "Sectional",
             knockout: "Knockout"
 
         };
@@ -801,10 +804,6 @@ function Competitions() {
                                             Sectional
                                         </option>
 
-                                        <option value="round_robin">
-                                            Round Robin
-                                        </option>
-
                                         <option value="knockout">
                                             Knockout
                                         </option>
@@ -836,14 +835,16 @@ function Competitions() {
                                                 onChange={handleChange}
                                             >
                                                 <option value="none">
-                                                    Single group — no sections
+                                                    One section — all teams together
                                                 </option>
                                                 <option value="multiple">
                                                     Multiple sections
                                                 </option>
                                             </select>
                                             <div className="form-text">
-                                                Use a single group when every participant plays in the same competition pool.
+                                                {form.section_mode === "multiple"
+                                                    ? "Teams are divided into sections and play a round-robin within their section."
+                                                    : "Every participant plays in the same competition pool. Teams play a round-robin within the section."}
                                             </div>
                                         </div>
                                     </div>
@@ -856,7 +857,7 @@ function Competitions() {
 
                                     <div className="row g-3 mb-4">
 
-                                        <div className="col-md-4">
+                                        <div className="col-md-6">
 
                                             <label className="form-label">
                                                 Minimum Teams per Section
@@ -875,7 +876,7 @@ function Competitions() {
                                         </div>
 
 
-                                        <div className="col-md-4">
+                                        <div className="col-md-6">
 
                                             <label className="form-label">
                                                 Maximum Teams per Section
@@ -893,23 +894,6 @@ function Competitions() {
 
                                         </div>
 
-
-                                        <div className="col-md-4">
-
-                                            <label className="form-label">
-                                                Same-Club Separation
-                                            </label>
-
-                                            <div className="form-control bg-light">
-                                                Automatic
-                                            </div>
-
-                                            <div className="form-text">
-                                                The draw engine will automatically
-                                                separate teams from the same club.
-                                            </div>
-
-                                        </div>
 
                                     </div>
                                     </>
@@ -945,8 +929,8 @@ function Competitions() {
                                             Midweek – One Day — 1 round per playing day
                                         </option>
 
-                                        <option value="week">
-                                            Week — up to 3 rounds per playing day (Monday–Friday)
+                                        <option value="weekday">
+                                            Weekday — up to 3 rounds per playing day (Monday–Friday)
                                         </option>
 
                                         <option value="weekend">
