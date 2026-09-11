@@ -265,32 +265,13 @@ function QuickTournament() {
         value
     ) => {
 
-        setTournament(prev => {
+        setTournament(prev => ({
 
-            if (field === "totalRounds") {
-                const totalRounds = Number(value);
-                const scoring = structuredClone(prev.scoring);
+            ...prev,
 
-                if (scoring.strengthRounds) {
-                    scoring.strengthRounds = Math.min(
-                        Number(scoring.strengthRounds),
-                        Math.max(1, totalRounds - 1)
-                    );
-                }
+            [field]: value
 
-                return {
-                    ...prev,
-                    totalRounds,
-                    scoring
-                };
-            }
-
-            return {
-                ...prev,
-                [field]: value
-            };
-
-        });
+        }));
 
     };
 
@@ -340,26 +321,6 @@ function QuickTournament() {
 
                     scoring.drawMode =
                         value ? "strength" : "standard";
-
-                    if (value) {
-                        const maxStrengthRounds =
-                            Math.max(1, Number(prev.totalRounds) - 1);
-
-                        if (!scoring.strengthRounds) {
-                            scoring.strengthRounds = maxStrengthRounds;
-                        }
-                    }
-
-                    break;
-
-                case "strengthRounds":
-
-                    scoring.strengthRounds = Math.min(
-                        Math.max(1, Number(value)),
-                        Math.max(1, Number(prev.totalRounds) - 1)
-                    );
-
-                    scoring.drawMode = "strength";
 
                     break;
 
@@ -602,9 +563,11 @@ function QuickTournament() {
                         tournamentId: databaseTournament.id,
                         roundNumber: localRound.number,
                         status:
-                            roundIndex === 0
+                            generatedTournament.scoring.drawMode === "strength"
                                 ? "in_progress"
-                                : "pending"
+                                : roundIndex === 0
+                                    ? "in_progress"
+                                    : "pending"
                     });
 
                 databaseRounds.push(databaseRound);
@@ -1177,9 +1140,17 @@ function QuickTournament() {
                 "Unable to find the match."
             );
 
-            return;
+            return false;
 
         }
+
+
+        /*
+         * Remember whether this is an edit of an already completed
+         * match. Editing a completed match must update the existing
+         * result without generating another Strength round.
+         */
+        const wasCompleted = Boolean(match.completed);
 
 
         /*
@@ -1235,7 +1206,7 @@ function QuickTournament() {
                 );
 
 
-                return;
+                return false;
 
             }
 
@@ -1270,18 +1241,22 @@ function QuickTournament() {
         setTournament(updatedTournament);
 
         /*
-         * Advance the tournament after a round is completely scored.
-         * Hybrid Strength mode may first have several pre-generated blind
-         * random rounds, followed by dynamically generated strength rounds.
+         * Strength mode advances only when every match in the current
+         * round has been scored. This is deliberately done after the
+         * score has been persisted and reflected in local state.
          */
-        if (!strengthRoundGenerationLock.current) {
+        if (
+            !wasCompleted &&
+            updatedTournament.scoring.drawMode === "strength" &&
+            !strengthRoundGenerationLock.current
+        ) {
 
             strengthRoundGenerationLock.current = true;
 
             try {
 
                 const advancedTournament =
-                    await advanceQuickTournamentRound(
+                    await generateNextStrengthRoundInDatabase(
                         updatedTournament
                     );
 
@@ -1292,12 +1267,12 @@ function QuickTournament() {
             } catch (error) {
 
                 console.error(
-                    "Failed to advance the tournament:",
+                    "Failed to generate the next Strength vs Strength round:",
                     error
                 );
 
                 alert(
-                    "The score was saved, but the next round could not be activated/generated.\n\n" +
+                    "The score was saved, but the next round could not be generated.\n\n" +
                     error.message
                 );
 
@@ -1309,27 +1284,24 @@ function QuickTournament() {
 
         }
 
+        return true;
+
     };
 
 
     /*
-     * Advance to the next round after the current round is complete.
-     *
-     * Standard mode simply completes the tournament when its final round
-     * is scored. Hybrid Strength mode pre-generates the blind random rounds
-     * and generates each Strength vs Strength round only after the previous
-     * round has been completed.
+     * Generate the next Strength vs Strength round after the current
+     * round has been completely scored.
      */
-    const advanceQuickTournamentRound = async (
+    const generateNextStrengthRoundInDatabase = async (
         completedTournament
     ) => {
 
+        if (completedTournament.scoring.drawMode !== "strength") {
+            return completedTournament;
+        }
+
         const completedRound =
-            completedTournament.rounds.find(
-                round =>
-                    round.number ===
-                    completedTournament.currentRound
-            ) ||
             completedTournament.rounds[
                 completedTournament.rounds.length - 1
             ];
@@ -1338,7 +1310,7 @@ function QuickTournament() {
             return completedTournament;
         }
 
-        if (completedRound.number >= completedTournament.totalRounds) {
+        if (completedTournament.rounds.length >= completedTournament.totalRounds) {
 
             if (completedTournament.supabaseTournamentId) {
                 await updateTournamentInDatabase(
@@ -1358,133 +1330,6 @@ function QuickTournament() {
 
         }
 
-        const drawMode =
-            completedTournament.scoring.drawMode;
-
-        const strengthRounds =
-            drawMode === "strength"
-                ? Math.min(
-                    Math.max(1, Number(
-                        completedTournament.scoring.strengthRounds ||
-                        completedTournament.totalRounds - 1
-                    )),
-                    completedTournament.totalRounds - 1
-                )
-                : 0;
-
-        const strengthStartRound =
-            completedTournament.totalRounds - strengthRounds + 1;
-
-        /*
-         * If there is another pre-generated blind random round, activate it.
-         */
-        if (
-            drawMode === "strength" &&
-            completedRound.number < strengthStartRound - 1
-        ) {
-
-            const nextRound =
-                completedTournament.rounds.find(
-                    round =>
-                        round.number ===
-                        completedRound.number + 1
-                );
-
-            if (!nextRound) {
-                return completedTournament;
-            }
-
-            if (nextRound.id) {
-                await updateRoundStatus({
-                    roundId: nextRound.id,
-                    status: "in_progress"
-                });
-            }
-
-            if (completedTournament.supabaseTournamentId) {
-                await updateRoundStatus({
-                    roundId: completedRound.id,
-                    status: "completed"
-                });
-
-                await updateTournamentInDatabase(
-                    completedTournament.supabaseTournamentId,
-                    {
-                        status: "in_progress",
-                        currentRound: nextRound.number
-                    }
-                );
-            }
-
-            return {
-                ...completedTournament,
-                rounds: completedTournament.rounds.map(round =>
-                    round.id === completedRound.id
-                        ? { ...round, status: "completed" }
-                        : round.id === nextRound.id
-                            ? { ...round, status: "in_progress" }
-                            : round
-                ),
-                status: "in_progress",
-                currentRound: nextRound.number
-            };
-
-        }
-
-        /*
-         * Standard mode already has all rounds. Advance to the next one.
-         */
-        if (drawMode !== "strength") {
-
-            const nextRound =
-                completedTournament.rounds.find(
-                    round =>
-                        round.number ===
-                        completedRound.number + 1
-                );
-
-            if (!nextRound) {
-                return completedTournament;
-            }
-
-            if (completedTournament.supabaseTournamentId) {
-                await updateRoundStatus({
-                    roundId: completedRound.id,
-                    status: "completed"
-                });
-
-                await updateRoundStatus({
-                    roundId: nextRound.id,
-                    status: "in_progress"
-                });
-
-                await updateTournamentInDatabase(
-                    completedTournament.supabaseTournamentId,
-                    {
-                        status: "in_progress",
-                        currentRound: nextRound.number
-                    }
-                );
-            }
-
-            return {
-                ...completedTournament,
-                rounds: completedTournament.rounds.map(round =>
-                    round.id === completedRound.id
-                        ? { ...round, status: "completed" }
-                        : round.id === nextRound.id
-                            ? { ...round, status: "in_progress" }
-                            : round
-                ),
-                currentRound: nextRound.number
-            };
-
-        }
-
-        /*
-         * The blind random phase is complete. Generate the next Strength
-         * vs Strength round from the standings.
-         */
         const currentStandings =
             calculateStandings(completedTournament);
 
@@ -1504,12 +1349,7 @@ function QuickTournament() {
         if (!tournamentId) {
             return {
                 ...completedTournament,
-                rounds: completedTournament.rounds.map(round =>
-                    round.id === completedRound.id
-                        ? { ...round, status: "completed" }
-                        : round
-                ).concat(nextRound),
-                status: "in_progress",
+                rounds: [...completedTournament.rounds, nextRound],
                 currentRound: nextRound.number
             };
         }
@@ -1573,11 +1413,7 @@ function QuickTournament() {
 
         return {
             ...completedTournament,
-            rounds: completedTournament.rounds.map(round =>
-                round.id === completedRound.id
-                    ? { ...round, status: "completed" }
-                    : round
-            ).concat(nextRound),
+            rounds: [...completedTournament.rounds, nextRound],
             status: "in_progress",
             currentRound: nextRound.number
         };

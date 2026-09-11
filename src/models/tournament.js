@@ -18,10 +18,6 @@ export function createTournament() {
 
             drawMode: "standard",
 
-            // Number of final rounds that use Strength vs Strength.
-            // Zero/unused in standard draw mode.
-            strengthRounds: 1,
-
             skins: {
 
                 enabled: false,
