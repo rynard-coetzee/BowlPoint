@@ -482,8 +482,16 @@ function CompetitionWorkspace() {
         confirmedDraw.rounds.every(round => round.competition_day_id)
     );
 
+    // A round is sectional when its fixtures belong to a section.
+    // Do not infer this from the round number: a single 5-team round robin
+    // legitimately has 5 sectional rounds, so rounds 4 and 5 are still
+    // sectional and must not be treated as playoffs.
     const sectionalMatches = confirmedDraw?.matches?.filter(match =>
-        match.round?.round_number <= 3
+        match.section_id !== null && match.section_id !== undefined
+    ) || [];
+
+    const playoffMatches = confirmedDraw?.matches?.filter(match =>
+        match.section_id === null || match.section_id === undefined
     ) || [];
 
     const sectionalComplete = Boolean(
@@ -499,7 +507,7 @@ function CompetitionWorkspace() {
         : !scheduleAssigned
             ? "schedule"
             : sectionalComplete
-                ? "playoffs"
+                ? (playoffMatches.length > 0 ? "playoffs" : "scoring")
                 : "scoring";
 
     const workspaceStageInfo = {
@@ -3858,7 +3866,7 @@ function CompetitionWorkspace() {
                             </div>
                             <div className="col-lg-4">
                                 <div className="card border mb-3"><div className="card-header bg-white"><strong>Rounds</strong></div><div className="card-body">{confirmedDraw.rounds.map(round=><div className="d-flex justify-content-between align-items-center border-bottom py-2" key={round.id}><strong>{round.round_number}. {round.round_name}</strong><span className="badge bg-light text-dark border">{confirmedDraw.matches.filter(m=>m.round_id===round.id).length} matches</span></div>)}</div></div>
-                                <div className="card border"><div className="card-header bg-white"><strong>Playoff Path</strong></div><div className="card-body">{confirmedDraw.rounds.filter(r=>r.round_number>3).map(round=><div className="mb-3" key={round.id}><div className="fw-semibold mb-2">{round.round_name}</div>{confirmedDraw.matches.filter(m=>m.round_id===round.id).sort((a,b)=>a.match_number-b.match_number).map(m=><div className="small border rounded p-2 mb-2" key={m.id}><div>{m.teamA ? <TeamDisplay team={m.teamA} /> : "Winner of previous stage"}</div><div className="text-muted text-center">vs</div><div>{m.teamB ? <TeamDisplay team={m.teamB} /> : "Winner of previous stage"}</div></div>)}</div>)}</div></div>
+                                <div className="card border"><div className="card-header bg-white"><strong>Playoff Path</strong></div><div className="card-body">{confirmedDraw.rounds.filter(r=>playoffMatches.some(m=>m.round_id===r.id)).map(round=><div className="mb-3" key={round.id}><div className="fw-semibold mb-2">{round.round_name}</div>{confirmedDraw.matches.filter(m=>m.round_id===round.id).sort((a,b)=>a.match_number-b.match_number).map(m=><div className="small border rounded p-2 mb-2" key={m.id}><div>{m.teamA ? <TeamDisplay team={m.teamA} /> : "Winner of previous stage"}</div><div className="text-muted text-center">vs</div><div>{m.teamB ? <TeamDisplay team={m.teamB} /> : "Winner of previous stage"}</div></div>)}</div>)}</div></div>
                             </div>
                         </div>
                     </div>
@@ -4633,7 +4641,7 @@ function CompetitionWorkspace() {
                                             <div className="row g-3">
                                                 {confirmedDraw.sections.map(section => {
                                                     const sectionMatches = (section.matches || [])
-                                                        .filter(match => (match.round?.round_number || 0) <= 3)
+                                                        .filter(match => match.section_id !== null && match.section_id !== undefined)
                                                         .sort((a, b) => {
                                                             const roundDiff = (a.round?.round_number || 0) - (b.round?.round_number || 0);
                                                             if (roundDiff !== 0) return roundDiff;
@@ -4778,7 +4786,7 @@ function CompetitionWorkspace() {
                                     )}
 
                                     {/* Playoffs remain grouped by round because they are not section-specific. */}
-                                    {confirmedDraw.rounds.filter(round => round.round_number > 3).length > 0 && (
+                                    {confirmedDraw.rounds.some(round => playoffMatches.some(match => match.round_id === round.id)) && (
                                         <div className="mb-4">
                                             <div className="d-flex justify-content-between align-items-center mb-3">
                                                 <div>
@@ -4786,7 +4794,7 @@ function CompetitionWorkspace() {
                                                     <div className="small text-muted">Quarter-finals, semi-finals and final.</div>
                                                 </div>
                                             </div>
-                                            {confirmedDraw.rounds.filter(round => round.round_number > 3).sort((a, b) => a.round_number - b.round_number).map(renderRound)}
+                                            {confirmedDraw.rounds.filter(round => playoffMatches.some(match => match.round_id === round.id)).sort((a, b) => a.round_number - b.round_number).map(renderRound)}
                                         </div>
                                     )}
 
