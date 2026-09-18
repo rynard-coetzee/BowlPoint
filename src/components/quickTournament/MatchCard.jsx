@@ -25,8 +25,6 @@ function MatchCard({
     const [skinsA, setSkinsA] = useState(match.skinsA ?? "");
     const [skinsB, setSkinsB] = useState(match.skinsB ?? "");
 
-    const [editing, setEditing] = useState(false);
-
     useEffect(() => {
 
         setScoreA(match.scoreA ?? "");
@@ -42,7 +40,7 @@ function MatchCard({
         match.skinsB
     ]);
 
-    const handleSave = async () => {
+    const handleSave = () => {
 
         if (scoreA === "" || scoreB === "") {
 
@@ -66,7 +64,7 @@ function MatchCard({
 
         }
 
-        const saved = await onSaveScore(
+        onSaveScore(
 
             roundId,
 
@@ -82,17 +80,13 @@ function MatchCard({
 
         );
 
-        if (saved !== false) {
-            setEditing(false);
-        }
-
     };
 
     return (
 
-        <div className="card h-100 shadow-sm">
+        <div className="card h-100 shadow-sm bowlpoint-match-card">
 
-            <div className="card-body">
+            <div className="card-body bowlpoint-match-card-body">
 
                 <button
                     type="button"
@@ -120,7 +114,7 @@ function MatchCard({
                     {match.teamA.name}
                 </button>
 
-                <div className="row">
+                <div className="row g-3">
 
                     <div className={skinsEnabled ? "col-6" : "col-12"}>
 
@@ -133,9 +127,11 @@ function MatchCard({
                         <input
                             type="number"
                             min="0"
-                            className="form-control form-control-lg text-center"
+                            className="form-control form-control-lg text-center bowlpoint-score-input"
+                            placeholder="Enter score"
+                            inputMode="numeric"
                             value={scoreA}
-                            disabled={match.completed && !editing}
+                            disabled={match.completed}
                             onChange={(e) =>
                                 setScoreA(e.target.value)
                             }
@@ -156,9 +152,11 @@ function MatchCard({
                             <input
                                 type="number"
                                 min="0"
-                                className="form-control form-control-lg text-center"
+                                className="form-control form-control-lg text-center bowlpoint-score-input bowlpoint-skins-input"
+                                placeholder="Enter skins"
+                                inputMode="numeric"
                                 value={skinsA}
-                                disabled={match.completed && !editing}
+                                disabled={match.completed}
                                 onChange={(e) =>
                                     setSkinsA(e.target.value)
                                 }
@@ -170,7 +168,7 @@ function MatchCard({
 
                 </div>
 
-                <div className="d-flex align-items-center my-4">
+                <div className="d-flex align-items-center my-4 bowlpoint-match-divider">
 
                     <div className="flex-grow-1 border-top"></div>
 
@@ -208,7 +206,7 @@ function MatchCard({
                     {match.teamB.name}
                 </button>
 
-                <div className="row">
+                <div className="row g-3">
 
                     <div className={skinsEnabled ? "col-6" : "col-12"}>
 
@@ -221,9 +219,11 @@ function MatchCard({
                         <input
                             type="number"
                             min="0"
-                            className="form-control form-control-lg text-center"
+                            className="form-control form-control-lg text-center bowlpoint-score-input"
+                            placeholder="Enter score"
+                            inputMode="numeric"
                             value={scoreB}
-                            disabled={match.completed && !editing}
+                            disabled={match.completed}
                             onChange={(e) =>
                                 setScoreB(e.target.value)
                             }
@@ -244,9 +244,11 @@ function MatchCard({
                             <input
                                 type="number"
                                 min="0"
-                                className="form-control form-control-lg text-center"
+                                className="form-control form-control-lg text-center bowlpoint-score-input bowlpoint-skins-input"
+                                placeholder="Enter skins"
+                                inputMode="numeric"
                                 value={skinsB}
-                                disabled={match.completed && !editing}
+                                disabled={match.completed}
                                 onChange={(e) =>
                                     setSkinsB(e.target.value)
                                 }
@@ -260,54 +262,29 @@ function MatchCard({
 
             </div>
 
-            <div className="card-footer bg-white">
+            <div className="card-footer bg-white bowlpoint-match-card-footer">
 
-                {match.completed && !editing ? (
+                {match.completed ? (
 
                     <button
-                        type="button"
-                        className="btn btn-outline-primary w-100"
-                        onClick={() => setEditing(true)}
+                        className="btn btn-success w-100"
+                        disabled
                     >
 
-                        <i className="bi bi-pencil me-2"></i>
-                        Edit Score
+                        ✓ Score Saved
 
                     </button>
 
                 ) : (
 
-                    <div className="d-flex gap-2">
+                    <button
+                        className="btn btn-primary w-100"
+                        onClick={handleSave}
+                    >
 
-                        <button
-                            type="button"
-                            className="btn btn-primary flex-grow-1"
-                            onClick={handleSave}
-                        >
+                        Save Score
 
-                            {match.completed ? "Update Score" : "Save Score"}
-
-                        </button>
-
-                        {match.completed && editing && (
-
-                            <button
-                                type="button"
-                                className="btn btn-outline-secondary"
-                                onClick={() => {
-                                    setScoreA(match.scoreA ?? "");
-                                    setScoreB(match.scoreB ?? "");
-                                    setSkinsA(match.skinsA ?? "");
-                                    setSkinsB(match.skinsB ?? "");
-                                    setEditing(false);
-                                }}
-                            >
-                                Cancel
-                            </button>
-
-                        )}
-
-                    </div>
+                    </button>
 
                 )}
 

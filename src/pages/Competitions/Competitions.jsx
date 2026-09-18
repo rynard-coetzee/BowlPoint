@@ -145,7 +145,8 @@ function Competitions() {
                     : (competition.section_mode || "multiple"),
 
             /*
-             * Schedule type is stored explicitly.
+             * Schedule type is now stored explicitly so Week and Weekend
+             * can both use up to 3 rounds per playing day.
              * Older competitions without schedule_type are migrated from
              * max_games_per_day: 1 = Midweek, otherwise Weekend.
              */
@@ -843,8 +844,8 @@ function Competitions() {
                                             </select>
                                             <div className="form-text">
                                                 {form.section_mode === "multiple"
-                                                    ? "Teams are divided into sections and play a round-robin within their section."
-                                                    : "Every participant plays in the same competition pool. Teams play a round-robin within the section."}
+                                                    ? "Teams are divided into sections, with each team playing a round-robin within its section."
+                                                    : "All teams compete in one section, with each team playing every other team in the section."}
                                             </div>
                                         </div>
                                     </div>
@@ -929,8 +930,8 @@ function Competitions() {
                                             Midweek – One Day — 1 round per playing day
                                         </option>
 
-                                        <option value="weekday">
-                                            Weekday — up to 3 rounds per playing day (Monday–Friday)
+                                        <option value="week">
+                                            Week — up to 3 rounds per playing day (Monday–Friday)
                                         </option>
 
                                         <option value="weekend">

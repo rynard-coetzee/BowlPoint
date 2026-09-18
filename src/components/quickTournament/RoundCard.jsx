@@ -6,7 +6,8 @@ function RoundCard({
     updateMatchScore,
     drawEditMode,
     selectedTeams,
-    onSelectTeamForSwap
+    onSelectTeamForSwap,
+    teams = []
 }) {
 
     const byeSelected =
@@ -34,13 +35,145 @@ function RoundCard({
 
             <div className="card-body">
 
-                <div className="row g-3">
+                {round.matches.some(match => !match.completed) && (
+
+                    <div className="mb-4">
+
+                        <label
+                            htmlFor={`gameJump-${round.id}`}
+                            className="form-label fw-semibold mb-2"
+                        >
+
+                            <i className="bi bi-search me-2"></i>
+
+                            Find Game
+
+                        </label>
+
+                        <select
+                            id={`gameJump-${round.id}`}
+                            className="form-select form-select-lg bowlpoint-game-jump-select"
+                            defaultValue=""
+                            onChange={(e) => {
+
+                                const matchId = e.target.value;
+
+                                if (!matchId) {
+                                    return;
+                                }
+
+                                const element = document.getElementById(
+                                    `quick-score-match-${matchId}`
+                                );
+
+                                if (element) {
+
+                                    element.scrollIntoView({
+                                        behavior: "smooth",
+                                        block: "center"
+                                    });
+
+                                    element.classList.add(
+                                        "bowlpoint-match-highlight"
+                                    );
+
+                                    window.setTimeout(() => {
+                                        element.classList.remove(
+                                            "bowlpoint-match-highlight"
+                                        );
+                                    }, 1600);
+
+                                }
+
+                                e.target.value = "";
+
+                            }}
+                        >
+
+                            <option value="">
+                                Select an unscored game...
+                            </option>
+
+                            {[...round.matches]
+                                .filter(match => !match.completed)
+                                .sort((a, b) => {
+
+                                    const getTeamNumber = (team) => {
+                                        const index = teams.findIndex(
+                                            item => item?.id === team?.id
+                                        );
+
+                                        return index >= 0
+                                            ? index + 1
+                                            : Number.MAX_SAFE_INTEGER;
+                                    };
+
+                                    const aNumber = Math.min(
+                                        getTeamNumber(a.teamA),
+                                        getTeamNumber(a.teamB)
+                                    );
+
+                                    const bNumber = Math.min(
+                                        getTeamNumber(b.teamA),
+                                        getTeamNumber(b.teamB)
+                                    );
+
+                                    return aNumber - bNumber;
+
+                                })
+                                .map(match => {
+
+                                    const getTeamNumber = (team) => {
+                                        const index = teams.findIndex(
+                                            item => item?.id === team?.id
+                                        );
+
+                                        return index >= 0
+                                            ? index + 1
+                                            : "?";
+                                    };
+
+                                    const teamANumber = getTeamNumber(
+                                        match.teamA
+                                    );
+
+                                    const teamBNumber = getTeamNumber(
+                                        match.teamB
+                                    );
+
+                                    return (
+
+                                        <option
+                                            key={match.id}
+                                            value={match.id}
+                                        >
+                                            #{teamANumber} {match.teamA.name}
+                                            {"  vs  "}
+                                            #{teamBNumber} {match.teamB.name}
+                                        </option>
+
+                                    );
+
+                                })}
+
+                        </select>
+
+                        <div className="form-text">
+                            Only unscored games are shown, in draw team-number order.
+                        </div>
+
+                    </div>
+
+                )}
+
+                <div className="row g-4">
 
                     {round.matches.map((match) => (
 
                         <div
                             key={match.id}
-                            className="col-12"
+                            id={`quick-score-match-${match.id}`}
+                            className="col-12 col-md-6 bowlpoint-match-scroll-target"
                         >
 
                             <MatchCard

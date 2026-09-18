@@ -101,3 +101,128 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+
+/* =========================================
+   Quick Tournament - Scoring Cards
+========================================= */
+
+.bowlpoint-match-card {
+  border-color: #dfe3e8;
+  border-radius: 12px;
+  overflow: hidden;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.bowlpoint-match-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.08) !important;
+}
+
+.bowlpoint-match-card-body {
+  padding: 1.25rem;
+}
+
+.bowlpoint-match-card .form-label {
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+
+.bowlpoint-score-input {
+  min-height: 58px;
+  background-color: #f0f7ff;
+  border: 2px solid #c9def7;
+  border-radius: 10px;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #1f3b5b;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.03);
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.bowlpoint-score-input::placeholder {
+  color: #8ba3bc;
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.bowlpoint-score-input:hover:not(:disabled) {
+  background-color: #eaf4ff;
+  border-color: #a9ccef;
+}
+
+.bowlpoint-score-input:focus {
+  background-color: #ffffff;
+  border-color: #0d6efd;
+  box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.12);
+}
+
+.bowlpoint-score-input:disabled {
+  background-color: #f1f3f5;
+  border-color: #dee2e6;
+  color: #6c757d;
+  opacity: 1;
+}
+
+.bowlpoint-skins-input {
+  min-height: 50px;
+  font-size: 1.15rem;
+}
+
+.bowlpoint-match-divider {
+  gap: 0.25rem;
+}
+
+.bowlpoint-match-divider > div {
+  border-color: #dee2e6 !important;
+}
+
+.bowlpoint-match-divider > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  min-height: 42px;
+  padding: 0.35rem 0.65rem;
+  border-radius: 50%;
+  background: #f1f5f9;
+  color: #52677d;
+  font-size: 0.9rem;
+}
+
+.bowlpoint-match-card-footer {
+  padding: 0.75rem 1.25rem 1.25rem;
+  border-top: 0;
+}
+
+@media (max-width: 767.98px) {
+  .bowlpoint-match-card-body {
+    padding: 1rem;
+  }
+
+  .bowlpoint-score-input {
+    min-height: 54px;
+  }
+}
+
+
+/* Quick Competition: game finder */
+.bowlpoint-game-jump-select {
+    border-color: #b9d8ff;
+    background-color: #f4f9ff;
+}
+
+.bowlpoint-game-jump-select:focus {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.15);
+    background-color: #ffffff;
+}
+
+.bowlpoint-match-scroll-target {
+    scroll-margin-top: 24px;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.bowlpoint-match-scroll-target.bowlpoint-match-highlight .bowlpoint-match-card {
+    box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.3), 0 0.5rem 1rem rgba(0, 0, 0, 0.12) !important;
+}

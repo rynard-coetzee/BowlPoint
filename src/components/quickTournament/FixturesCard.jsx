@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import RoundCard from "./RoundCard";
+import { exportQuickCompetitionDrawPdf } from "../../lib/drawPdf";
 
 function FixturesCard({
     tournament,
@@ -178,6 +179,26 @@ function FixturesCard({
                         Scoring
 
                     </h5>
+
+                    {tournament.rounds?.length > 0 && (
+
+                        <button
+                            type="button"
+                            className="btn btn-outline-secondary btn-sm"
+                            onClick={() =>
+                                exportQuickCompetitionDrawPdf(
+                                    tournament
+                                )
+                            }
+                        >
+
+                            <i className="bi bi-file-earmark-pdf me-2"></i>
+
+                            Export Draw PDF
+
+                        </button>
+
+                    )}
 
                 </div>
 
@@ -481,6 +502,10 @@ function FixturesCard({
 
                         onSelectTeamForSwap={
                             onSelectTeamForSwap
+                        }
+
+                        teams={
+                            tournament.teams
                         }
 
                     />

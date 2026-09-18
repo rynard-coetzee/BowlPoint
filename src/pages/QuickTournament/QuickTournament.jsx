@@ -1140,17 +1140,9 @@ function QuickTournament() {
                 "Unable to find the match."
             );
 
-            return false;
+            return;
 
         }
-
-
-        /*
-         * Remember whether this is an edit of an already completed
-         * match. Editing a completed match must update the existing
-         * result without generating another Strength round.
-         */
-        const wasCompleted = Boolean(match.completed);
 
 
         /*
@@ -1206,7 +1198,7 @@ function QuickTournament() {
                 );
 
 
-                return false;
+                return;
 
             }
 
@@ -1246,7 +1238,6 @@ function QuickTournament() {
          * score has been persisted and reflected in local state.
          */
         if (
-            !wasCompleted &&
             updatedTournament.scoring.drawMode === "strength" &&
             !strengthRoundGenerationLock.current
         ) {
@@ -1283,8 +1274,6 @@ function QuickTournament() {
             }
 
         }
-
-        return true;
 
     };
 
