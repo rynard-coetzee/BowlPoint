@@ -1037,7 +1037,7 @@ function CompetitionWorkspace() {
 
             const winPoints = Number(competition?.scoring?.win ?? 2);
             const drawPoints = Number(competition?.scoring?.draw ?? (winPoints / 2));
-            const lossPoints = Number(competition?.scoring?.loss ?? 0);
+            const lossPoints = 0;
             const pointsA = scoreA > scoreB ? winPoints : scoreA === scoreB ? drawPoints : lossPoints;
             const pointsB = scoreB > scoreA ? winPoints : scoreA === scoreB ? drawPoints : lossPoints;
 
@@ -4948,7 +4948,7 @@ function CompetitionWorkspace() {
                                         </div>
                                     </div>
                                     <div className="alert alert-light border mt-3 mb-0 small">
-                                        Win = {competition?.scoring?.win ?? 2} points, Draw = {competition?.scoring?.draw ?? 1} points, Loss = {competition?.scoring?.loss ?? 0} points.
+                                        Win = {competition?.scoring?.win ?? 2} points, Draw = {(Number(competition?.scoring?.win ?? 2) / 2)} points, Loss = 0 points.
                                         {competition?.scoring?.skins?.enabled ? ` Each skin is worth ${competition.scoring.skins.pointsPerSkin ?? 1} additional point(s).` : ""}
                                         {" "}Aggregate is calculated from total Shots For minus Shots Against.
                                     </div>

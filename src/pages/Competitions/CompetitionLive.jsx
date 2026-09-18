@@ -21,8 +21,8 @@ function getSectionByeTeam(section, round, matches) {
 
 function calculateStandings(section, matches, scoring) {
     const winPoints = Number(scoring?.win ?? 2);
-    const drawPoints = Number(scoring?.draw ?? 1);
-    const lossPoints = Number(scoring?.loss ?? 0);
+    const drawPoints = Number(scoring?.win ?? 2) / 2;
+    const lossPoints = 0;
     const skinsEnabled = Boolean(scoring?.skins?.enabled);
     const pointsPerSkin = Number(scoring?.skins?.pointsPerSkin ?? 1);
 
