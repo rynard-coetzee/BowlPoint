@@ -78,6 +78,10 @@ function CompetitionWorkspace() {
         players: {}
     });
 
+    // Player search text for each team position. Search matches BSA number
+    // or player name within the selected club.
+    const [playerSearch, setPlayerSearch] = useState({});
+
     const [dayForm, setDayForm] = useState({
         playing_date: "",
         name: "",
@@ -1037,7 +1041,7 @@ function CompetitionWorkspace() {
 
             const winPoints = Number(competition?.scoring?.win ?? 2);
             const drawPoints = Number(competition?.scoring?.draw ?? (winPoints / 2));
-            const lossPoints = 0;
+            const lossPoints = Number(competition?.scoring?.loss ?? 0);
             const pointsA = scoreA > scoreB ? winPoints : scoreA === scoreB ? drawPoints : lossPoints;
             const pointsB = scoreB > scoreA ? winPoints : scoreA === scoreB ? drawPoints : lossPoints;
 
@@ -1162,6 +1166,7 @@ function CompetitionWorkspace() {
             players: {}
         });
 
+        setPlayerSearch({});
         setEditingTeam(null);
     };
 
@@ -1329,6 +1334,7 @@ function CompetitionWorkspace() {
             players: playerMap
         });
 
+        setPlayerSearch({});
         setShowTeamForm(true);
     };
 
@@ -1345,6 +1351,10 @@ function CompetitionWorkspace() {
             ...prev,
             [name]: value
         }));
+
+        if (name === "club_id") {
+            setPlayerSearch({});
+        }
     };
 
     /*
@@ -2493,6 +2503,35 @@ function CompetitionWorkspace() {
                 teamForm.club_id
         );
 
+    const getFilteredClubPlayers = (positionKey) => {
+        const search = String(
+            playerSearch[positionKey] || ""
+        )
+            .trim()
+            .toLowerCase();
+
+        if (!search) {
+            return clubPlayers;
+        }
+
+        return clubPlayers.filter(player => {
+            const bsaNumber = String(player.bsa_number || "").toLowerCase();
+            const name = playerName(player).toLowerCase();
+
+            return (
+                bsaNumber.includes(search) ||
+                name.includes(search)
+            );
+        });
+    };
+
+    const handlePlayerSearchChange = (positionKey, value) => {
+        setPlayerSearch(prev => ({
+            ...prev,
+            [positionKey]: value
+        }));
+    };
+
     /*
      * Get player display name.
      */
@@ -3487,6 +3526,25 @@ function CompetitionWorkspace() {
                                                 {position.label}
                                             </label>
 
+                                            <div className="input-group mb-2">
+                                                <span className="input-group-text">
+                                                    <i className="bi bi-search"></i>
+                                                </span>
+                                                <input
+                                                    type="text"
+                                                    className="form-control"
+                                                    placeholder="Search by BSA number or name..."
+                                                    value={playerSearch[position.key] || ""}
+                                                    onChange={(e) =>
+                                                        handlePlayerSearchChange(
+                                                            position.key,
+                                                            e.target.value
+                                                        )
+                                                    }
+                                                    disabled={!teamForm.club_id}
+                                                />
+                                            </div>
+
                                             <select
                                                 className="form-select"
                                                 value={selectedPlayerId}
@@ -3512,7 +3570,7 @@ function CompetitionWorkspace() {
                                                 </option>
 
 
-                                                {clubPlayers.map(
+                                                {getFilteredClubPlayers(position.key).map(
                                                     player => {
 
                                                         const alreadySelected =
@@ -3534,9 +3592,9 @@ function CompetitionWorkspace() {
                                                                     alreadySelected
                                                                 }
                                                             >
-                                                                {playerName(
-                                                                    player
-                                                                )}
+                                                                {player.bsa_number
+                                                                    ? `${player.bsa_number} — ${playerName(player)}`
+                                                                    : playerName(player)}
                                                             </option>
                                                         );
 
@@ -4948,7 +5006,7 @@ function CompetitionWorkspace() {
                                         </div>
                                     </div>
                                     <div className="alert alert-light border mt-3 mb-0 small">
-                                        Win = {competition?.scoring?.win ?? 2} points, Draw = {(Number(competition?.scoring?.win ?? 2) / 2)} points, Loss = 0 points.
+                                        Win = {competition?.scoring?.win ?? 2} points, Draw = {competition?.scoring?.draw ?? 1} points, Loss = {competition?.scoring?.loss ?? 0} points.
                                         {competition?.scoring?.skins?.enabled ? ` Each skin is worth ${competition.scoring.skins.pointsPerSkin ?? 1} additional point(s).` : ""}
                                         {" "}Aggregate is calculated from total Shots For minus Shots Against.
                                     </div>

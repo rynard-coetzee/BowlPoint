@@ -27,6 +27,7 @@ function Competitions() {
         max_teams_per_section: 6,
         win_points: 2,
         draw_points: 1,
+        loss_points: 0,
         skins_enabled: false,
         points_per_skin: 1
     });
@@ -93,6 +94,7 @@ function Competitions() {
             max_teams_per_section: 6,
             win_points: 2,
             draw_points: 1,
+            loss_points: 0,
         skins_enabled: false,
         points_per_skin: 1
         });
@@ -164,7 +166,10 @@ function Competitions() {
                 scoring.win ?? 2,
 
             draw_points:
-                (scoring.win ?? 2) / 2,
+                scoring.draw ?? 1,
+
+            loss_points:
+                scoring.loss ?? 0,
 
             skins_enabled:
                 scoring.skins?.enabled ?? false,
@@ -192,9 +197,6 @@ function Competitions() {
         setForm(prev => ({
             ...prev,
             [name]: value,
-            ...(name === "win_points"
-                ? { draw_points: Number(value) / 2 }
-                : {}),
             ...(name === "structure" && value === "knockout"
                 ? { section_mode: "none" }
                 : {}),
@@ -342,10 +344,10 @@ function Competitions() {
                         Number(form.win_points),
 
                     draw:
-                        Number(form.win_points) / 2,
+                        Number(form.draw_points),
 
                     loss:
-                        0,
+                        Number(form.loss_points),
 
                     skins: {
                         enabled: Boolean(form.skins_enabled),
@@ -841,9 +843,7 @@ function Competitions() {
                                                 </option>
                                             </select>
                                             <div className="form-text">
-                                                {form.section_mode === "multiple"
-                                                    ? "Teams are divided into sections, with each team playing a round-robin within its section."
-                                                    : "All teams compete in one section, with each team playing every other team in the section."}
+                                                Use a single section when every participant plays in the same competition pool. Teams play a round-robin within the section.
                                             </div>
                                         </div>
                                     </div>
@@ -951,7 +951,7 @@ function Competitions() {
 
                             <div className="row g-3">
 
-                                <div className="col-md-6">
+                                <div className="col-md-4">
 
                                     <label className="form-label">
                                         Win Points
@@ -962,7 +962,6 @@ function Competitions() {
                                         name="win_points"
                                         className="form-control"
                                         min="0"
-                                        step="1"
                                         value={form.win_points}
                                         onChange={handleChange}
                                     />
@@ -970,7 +969,7 @@ function Competitions() {
                                 </div>
 
 
-                                <div className="col-md-6">
+                                <div className="col-md-4">
 
                                     <label className="form-label">
                                         Draw Points
@@ -978,20 +977,33 @@ function Competitions() {
 
                                     <input
                                         type="number"
-                                        className="form-control bg-light"
+                                        name="draw_points"
+                                        className="form-control"
                                         min="0"
-                                        step="0.5"
-                                        value={Number(form.win_points) / 2}
-                                        readOnly
-                                        aria-describedby="draw-points-help"
+                                        value={form.draw_points}
+                                        onChange={handleChange}
                                     />
 
                                 </div>
 
-                            </div>
 
-                            <div id="draw-points-help" className="form-text mt-2">
-                                Draw Points are automatically calculated as half of the Win Points. A loss awards 0 points.
+                                <div className="col-md-4">
+
+                                    <label className="form-label">
+                                        Loss Points
+                                    </label>
+
+                                    <input
+                                        type="number"
+                                        name="loss_points"
+                                        className="form-control"
+                                        min="0"
+                                        value={form.loss_points}
+                                        onChange={handleChange}
+                                    />
+
+                                </div>
+
                             </div>
 
                             <hr className="my-4" />

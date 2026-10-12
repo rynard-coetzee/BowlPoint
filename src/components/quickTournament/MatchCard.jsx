@@ -84,9 +84,9 @@ function MatchCard({
 
     return (
 
-        <div className="card h-100 shadow-sm bowlpoint-match-card">
+        <div className="card h-100 shadow-sm">
 
-            <div className="card-body bowlpoint-match-card-body">
+            <div className="card-body">
 
                 <button
                     type="button"
@@ -114,7 +114,7 @@ function MatchCard({
                     {match.teamA.name}
                 </button>
 
-                <div className="row g-3">
+                <div className="row">
 
                     <div className={skinsEnabled ? "col-6" : "col-12"}>
 
@@ -127,9 +127,7 @@ function MatchCard({
                         <input
                             type="number"
                             min="0"
-                            className="form-control form-control-lg text-center bowlpoint-score-input"
-                            placeholder="Enter score"
-                            inputMode="numeric"
+                            className="form-control form-control-lg text-center"
                             value={scoreA}
                             disabled={match.completed}
                             onChange={(e) =>
@@ -152,9 +150,7 @@ function MatchCard({
                             <input
                                 type="number"
                                 min="0"
-                                className="form-control form-control-lg text-center bowlpoint-score-input bowlpoint-skins-input"
-                                placeholder="Enter skins"
-                                inputMode="numeric"
+                                className="form-control form-control-lg text-center"
                                 value={skinsA}
                                 disabled={match.completed}
                                 onChange={(e) =>
@@ -168,7 +164,7 @@ function MatchCard({
 
                 </div>
 
-                <div className="d-flex align-items-center my-4 bowlpoint-match-divider">
+                <div className="d-flex align-items-center my-4">
 
                     <div className="flex-grow-1 border-top"></div>
 
@@ -206,7 +202,7 @@ function MatchCard({
                     {match.teamB.name}
                 </button>
 
-                <div className="row g-3">
+                <div className="row">
 
                     <div className={skinsEnabled ? "col-6" : "col-12"}>
 
@@ -219,9 +215,7 @@ function MatchCard({
                         <input
                             type="number"
                             min="0"
-                            className="form-control form-control-lg text-center bowlpoint-score-input"
-                            placeholder="Enter score"
-                            inputMode="numeric"
+                            className="form-control form-control-lg text-center"
                             value={scoreB}
                             disabled={match.completed}
                             onChange={(e) =>
@@ -244,9 +238,7 @@ function MatchCard({
                             <input
                                 type="number"
                                 min="0"
-                                className="form-control form-control-lg text-center bowlpoint-score-input bowlpoint-skins-input"
-                                placeholder="Enter skins"
-                                inputMode="numeric"
+                                className="form-control form-control-lg text-center"
                                 value={skinsB}
                                 disabled={match.completed}
                                 onChange={(e) =>
@@ -262,7 +254,7 @@ function MatchCard({
 
             </div>
 
-            <div className="card-footer bg-white bowlpoint-match-card-footer">
+            <div className="card-footer bg-white">
 
                 {match.completed ? (
 
