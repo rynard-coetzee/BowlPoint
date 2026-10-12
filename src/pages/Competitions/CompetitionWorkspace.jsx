@@ -2510,19 +2510,26 @@ function CompetitionWorkspace() {
             .trim()
             .toLowerCase();
 
-        if (!search) {
-            return clubPlayers;
-        }
+        const filteredPlayers = search
+            ? clubPlayers.filter(player => {
+                  const bsaNumber = String(player.bsa_number || "").toLowerCase();
+                  const name = playerName(player).toLowerCase();
 
-        return clubPlayers.filter(player => {
-            const bsaNumber = String(player.bsa_number || "").toLowerCase();
-            const name = playerName(player).toLowerCase();
+                  return (
+                      bsaNumber.includes(search) ||
+                      name.includes(search)
+                  );
+              })
+            : clubPlayers;
 
-            return (
-                bsaNumber.includes(search) ||
-                name.includes(search)
-            );
-        });
+        // Always display players alphabetically by their displayed name.
+        // Use a copy so the original players array is never mutated.
+        return [...filteredPlayers].sort((a, b) =>
+            playerName(a).localeCompare(playerName(b), undefined, {
+                sensitivity: "base",
+                numeric: true,
+            })
+        );
     };
 
     const handlePlayerSearchChange = (positionKey, value) => {
