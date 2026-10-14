@@ -58,6 +58,19 @@ function CompetitionWorkspace() {
     const [collapsedScoringSections, setCollapsedScoringSections] = useState({});
     const scoringSectionRefs = useRef({});
     const pendingSectionToggleRef = useRef(null);
+    const shouldScrollToTeamFormRef = useRef(false);
+    const suppressNextWorkspaceStageScrollRef = useRef(false);
+
+    // Remember the last club used for a team so adding several teams from the
+    // same club is quicker. Persist per competition so it survives a reload.
+    const lastUsedClubStorageKey = `bowlpoint:last-used-club:${competitionId}`;
+    const [lastUsedClubId, setLastUsedClubId] = useState(() => {
+        try {
+            return localStorage.getItem(`bowlpoint:last-used-club:${competitionId}`) || "";
+        } catch {
+            return "";
+        }
+    });
 
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -250,6 +263,7 @@ function CompetitionWorkspace() {
                 last_name,
                 display_name,
                 club_id,
+                second_club_id,
                 active
             `)
             .eq("active", true)
@@ -533,9 +547,45 @@ function CompetitionWorkspace() {
 
     useEffect(() => {
         if (loading || !competition) return;
-        const timer = setTimeout(() => focusWorkspaceStage(workspaceStage), 120);
+
+        // A successful team save has its own explicit scroll target. Skip this
+        // progressive-stage scroll once so that adding the 3rd team does not
+        // immediately move the user to the Draw section.
+        if (suppressNextWorkspaceStageScrollRef.current) {
+            suppressNextWorkspaceStageScrollRef.current = false;
+            return;
+        }
+
+        // While the competition is still in the setup/draw phase, land the
+        // secretary on the Competition Teams section first. This is more
+        // useful than jumping straight to the Draw Planner because teams are
+        // still the main thing that needs to be reviewed/added. Once a draw
+        // has been confirmed, continue using the normal progressive stage
+        // navigation.
+        const initialStage = !confirmedDraw ? "teams" : workspaceStage;
+        const timer = setTimeout(() => focusWorkspaceStage(initialStage), 120);
         return () => clearTimeout(timer);
-    }, [loading, workspaceStage]);
+    }, [loading, competition, confirmedDraw, workspaceStage]);
+
+    useEffect(() => {
+        if (!showTeamForm || !shouldScrollToTeamFormRef.current) return;
+
+        // Wait for the Add Team form to be rendered before scrolling.
+        // Scroll to the top of the Competition Teams card rather than the
+        // form itself. The form is tall, and scrolling to its DOM position
+        // can leave the viewport down at the Players section. The Teams card
+        // has the correct scroll offset for the sticky progress header and
+        // brings the Club / Team Name fields into view first.
+        const timer = setTimeout(() => {
+            const element = document.getElementById("workspace-teams");
+            if (element) {
+                element.scrollIntoView({ behavior: "smooth", block: "start" });
+            }
+            shouldScrollToTeamFormRef.current = false;
+        }, 80);
+
+        return () => clearTimeout(timer);
+    }, [showTeamForm]);
 
     useEffect(() => {
         // Automatically roll up a section once all of its sectional games are
@@ -1159,9 +1209,9 @@ function CompetitionWorkspace() {
     /*
      * Reset team form.
      */
-    const resetTeamForm = () => {
+    const resetTeamForm = (clubId = lastUsedClubId) => {
         setTeamForm({
-            club_id: "",
+            club_id: clubId || "",
             team_name: "",
             players: {}
         });
@@ -1305,13 +1355,8 @@ function CompetitionWorkspace() {
      */
     const handleAddTeam = () => {
         resetTeamForm();
-
+        shouldScrollToTeamFormRef.current = true;
         setShowTeamForm(true);
-
-        window.scrollTo({
-            top: document.body.scrollHeight,
-            behavior: "smooth"
-        });
     };
 
     /*
@@ -1544,10 +1589,31 @@ function CompetitionWorkspace() {
                 throw playersResult.error;
             }
 
+            // Remember the club used for this team so the next Add Team form
+            // can preselect it. Persisting per competition keeps this useful
+            // even after a page refresh.
+            setLastUsedClubId(teamForm.club_id);
+            try {
+                localStorage.setItem(
+                    lastUsedClubStorageKey,
+                    teamForm.club_id
+                );
+            } catch {
+                // localStorage may be unavailable in some browser/privacy modes.
+            }
+
+            // Keep the user at the top of Competition Teams after saving.
+            // Suppress the normal progressive-stage jump because saving the
+            // third team can otherwise immediately move the page to Draw.
+            suppressNextWorkspaceStageScrollRef.current = true;
             setShowTeamForm(false);
-            resetTeamForm();
+            resetTeamForm(teamForm.club_id);
 
             await loadData();
+
+            window.setTimeout(() => {
+                focusWorkspaceStage("teams");
+            }, 120);
 
         } catch (error) {
             console.error(
@@ -2426,8 +2492,11 @@ function CompetitionWorkspace() {
     };
 
     /*
-     * Player counts by participating club. Counts are based on the players
-     * actually assigned to competition teams and are unique per player.
+     * Player counts by participating club. Counts are based on the player
+     * assignments actually entered into competition teams. Each team-player
+     * row counts as one player entry, so 4 pairs teams correctly show 8
+     * player entries. This also works when a player is registered with a
+     * second club and represents that club in this competition.
      */
     const getClubPlayerCounts = () => {
         const counts = new Map();
@@ -2442,7 +2511,7 @@ function CompetitionWorkspace() {
                 clubId,
                 name: club.name || entry.name || "Unknown Club",
                 shortName: club.short_name || "",
-                playerIds: new Set()
+                playerCount: 0
             });
         });
 
@@ -2456,23 +2525,17 @@ function CompetitionWorkspace() {
                     clubId,
                     name: club.name || "Unknown Club",
                     shortName: club.short_name || "",
-                    playerIds: new Set()
+                    playerCount: 0
                 });
             }
 
             const entry = counts.get(clubId);
-            (team.competition_team_players || []).forEach(teamPlayer => {
-                if (teamPlayer.player_id) {
-                    entry.playerIds.add(teamPlayer.player_id);
-                }
-            });
+            entry.playerCount += (team.competition_team_players || []).filter(
+                teamPlayer => Boolean(teamPlayer.player_id)
+            ).length;
         });
 
         return Array.from(counts.values())
-            .map(entry => ({
-                ...entry,
-                playerCount: entry.playerIds.size
-            }))
             .sort((a, b) =>
                 a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
             );
@@ -2497,10 +2560,9 @@ function CompetitionWorkspace() {
      * Players for selected club.
      */
     const clubPlayers =
-        players.filter(
-            player =>
-                player.club_id ===
-                teamForm.club_id
+        players.filter(player =>
+            player.club_id === teamForm.club_id ||
+            player.second_club_id === teamForm.club_id
         );
 
     const getFilteredClubPlayers = (positionKey) => {
@@ -2522,14 +2584,35 @@ function CompetitionWorkspace() {
               })
             : clubPlayers;
 
-        // Always display players alphabetically by their displayed name.
-        // Use a copy so the original players array is never mutated.
-        return [...filteredPlayers].sort((a, b) =>
-            playerName(a).localeCompare(playerName(b), undefined, {
-                sensitivity: "base",
-                numeric: true,
-            })
-        );
+        // Sort by the player's given name first: nickname when one is set,
+        // otherwise first name. Then use surname as a tie-breaker. This keeps
+        // the dropdown in true Firstname/Nickname alphabetical order instead
+        // of sorting by BSA number or the full display string.
+        return [...filteredPlayers].sort((a, b) => {
+            const getGivenName = (player) =>
+                String(player?.nickname || player?.first_name || "")
+                    .trim()
+                    .toLocaleLowerCase();
+
+            const getSurname = (player) =>
+                String(player?.last_name || "")
+                    .trim()
+                    .toLocaleLowerCase();
+
+            const givenNameCompare = getGivenName(a).localeCompare(
+                getGivenName(b),
+                undefined,
+                { sensitivity: "base", numeric: true }
+            );
+
+            if (givenNameCompare !== 0) return givenNameCompare;
+
+            return getSurname(a).localeCompare(
+                getSurname(b),
+                undefined,
+                { sensitivity: "base", numeric: true }
+            );
+        });
     };
 
     const handlePlayerSearchChange = (positionKey, value) => {
@@ -2856,11 +2939,24 @@ function CompetitionWorkspace() {
             competition.format
         );
 
+    // For team selection, show bowling positions in the order a team is
+    // normally built from the skip backwards: Skip, Third, Second, Lead.
+    // Pairs therefore naturally become Skip, Lead. Keep the canonical
+    // position order above unchanged for saving/database/display logic.
+    const playerSelectionPositions = [...positions].sort(
+        (a, b) => b.order - a.order
+    );
+
     return (
         <>
             <style>{`
                 .workspace-progress { position: sticky; top: 12px; z-index: 20; }
                 .workspace-stage-card { scroll-margin-top: 110px; transition: box-shadow .2s ease, opacity .2s ease; }
+                /* The sticky Competition Progress bar is tall enough to cover the top of
+                   the Teams card when its generic scroll offset is used. Give the Teams
+                   section its own larger offset so the full header and Add Team button
+                   are visible after navigation/saving. */
+                #workspace-teams { scroll-margin-top: 180px; }
                 .workspace-stage-card.workspace-collapsed > .card-body { display: none; }
                 .workspace-stage-card.workspace-collapsed > .card-header { border-bottom: 0; }
                 .workspace-stage-card.workspace-collapsed { opacity: .86; }
@@ -3432,7 +3528,10 @@ function CompetitionWorkspace() {
 
                 {showTeamForm && (
 
-                    <div className="card-body border-bottom">
+                    <div
+                        id="workspace-team-form"
+                        className="card-body border-bottom"
+                    >
 
                         <form onSubmit={handleSaveTeam}>
 
@@ -3516,7 +3615,7 @@ function CompetitionWorkspace() {
 
                             <div className="row g-3">
 
-                                {positions.map(position => {
+                                {playerSelectionPositions.map(position => {
 
                                     const selectedPlayerId =
                                         teamForm.players[
@@ -3552,6 +3651,57 @@ function CompetitionWorkspace() {
                                                 />
                                             </div>
 
+                                            {teamForm.club_id && String(playerSearch[position.key] || "").trim() ? (
+                                                <div
+                                                    className="list-group mt-2"
+                                                    style={{
+                                                        maxHeight: "220px",
+                                                        overflowY: "auto"
+                                                    }}
+                                                >
+                                                    {getFilteredClubPlayers(position.key)
+                                                        .filter(player =>
+                                                            !Object.entries(teamForm.players).some(
+                                                                ([key, value]) =>
+                                                                    key !== position.key &&
+                                                                    value === player.id
+                                                            )
+                                                        )
+                                                        .map(player => (
+                                                            <button
+                                                                key={player.id}
+                                                                type="button"
+                                                                className="list-group-item list-group-item-action d-flex justify-content-between align-items-center"
+                                                                onClick={() => {
+                                                                    handlePlayerChange(position.key, player.id);
+                                                                    setPlayerSearch(prev => ({
+                                                                        ...prev,
+                                                                        [position.key]: ""
+                                                                    }));
+                                                                }}
+                                                            >
+                                                                <span>{playerName(player)}</span>
+                                                                {player.bsa_number ? (
+                                                                    <small className="text-muted">
+                                                                        {player.bsa_number}
+                                                                    </small>
+                                                                ) : null}
+                                                            </button>
+                                                        ))}
+
+                                                    {getFilteredClubPlayers(position.key).filter(player =>
+                                                        !Object.entries(teamForm.players).some(
+                                                            ([key, value]) =>
+                                                                key !== position.key &&
+                                                                value === player.id
+                                                        )
+                                                    ).length === 0 && (
+                                                        <div className="list-group-item text-muted">
+                                                            No matching players found.
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ) : (
                                             <select
                                                 className="form-select"
                                                 value={selectedPlayerId}
@@ -3609,6 +3759,7 @@ function CompetitionWorkspace() {
                                                 )}
 
                                             </select>
+                                            )}
 
                                         </div>
                                     );
@@ -3626,7 +3777,7 @@ function CompetitionWorkspace() {
                                         <i className="bi bi-exclamation-triangle me-2"></i>
 
                                         There are no active registered players
-                                        for this club.
+                                        for this club (including players who have it as their second club).
 
                                     </div>
 

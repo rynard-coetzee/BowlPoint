@@ -29,6 +29,7 @@ function Players() {
         nickname: "",
         last_name: "",
         club_id: "",
+        second_club_id: "",
         date_registered: "",
         bsa_number: "",
         id_number: "",
@@ -57,11 +58,12 @@ function Players() {
                     last_name,
                     display_name,
                     club_id,
+                    second_club_id,
                     date_registered,
                     bsa_number,
                     id_number,
                     active,
-                    clubs (
+                    primary_club:clubs!players_club_id_fkey (
                         id,
                         name,
                         short_name,
@@ -158,6 +160,7 @@ function Players() {
             nickname: "",
             last_name: "",
             club_id: "",
+            second_club_id: "",
             date_registered: "",
             bsa_number: "",
             id_number: "",
@@ -289,6 +292,7 @@ function Players() {
             nickname: player.nickname || "",
             last_name: player.last_name || "",
             club_id: player.club_id || "",
+            second_club_id: player.second_club_id || "",
             date_registered: player.date_registered || "",
             bsa_number: player.bsa_number || "",
             id_number: player.id_number || "",
@@ -357,6 +361,14 @@ function Players() {
 
         }
 
+        if (form.second_club_id && form.second_club_id === form.club_id) {
+
+            alert("The second club must be different from the primary club.");
+
+            return;
+
+        }
+
 
         setSaving(true);
 
@@ -374,6 +386,9 @@ function Players() {
 
             club_id:
                 form.club_id,
+
+            second_club_id:
+                form.second_club_id || null,
 
             date_registered:
                 form.date_registered || null,
@@ -462,13 +477,22 @@ function Players() {
 
 
         const clubName =
-            player.clubs?.name
+            player.primary_club?.name
                 ?.toLowerCase() || "";
 
 
         const shortClubName =
-            player.clubs?.short_name
+            player.primary_club?.short_name
                 ?.toLowerCase() || "";
+
+        const secondClub =
+            clubs.find(club => club.id === player.second_club_id);
+
+        const secondClubName =
+            secondClub?.name?.toLowerCase() || "";
+
+        const secondClubShortName =
+            secondClub?.short_name?.toLowerCase() || "";
 
 
         const bsaNumber =
@@ -480,6 +504,8 @@ function Players() {
             fullName.includes(searchText) ||
             clubName.includes(searchText) ||
             shortClubName.includes(searchText) ||
+            secondClubName.includes(searchText) ||
+            secondClubShortName.includes(searchText) ||
             bsaNumber.includes(searchText)
         );
 
@@ -708,7 +734,7 @@ function Players() {
                                                 <tr key={`missing-${player.id}`}>
                                                     <td>{player.nickname || player.first_name} {player.last_name}</td>
                                                     <td>{player.bsa_number || "—"}</td>
-                                                    <td>{player.clubs?.short_name || player.clubs?.name || "—"}</td>
+                                                    <td>{player.primary_club?.short_name || player.primary_club?.name || "—"}</td>
                                                     <td><span className="badge bg-danger">Review</span></td>
                                                 </tr>
                                             ))}
@@ -742,7 +768,7 @@ function Players() {
                                                     <td>{item.source_name}</td>
                                                     <td>{item.bsa_number}</td>
                                                     <td>{item.club_name || "—"}</td>
-                                                    <td>{item.player.clubs?.short_name || item.player.clubs?.name || "—"}</td>
+                                                    <td>{item.player.primary_club?.short_name || item.player.primary_club?.name || "—"}</td>
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -889,6 +915,41 @@ function Players() {
                                             </option>
 
                                         ))}
+
+                                    </select>
+
+                                </div>
+
+
+                                {/* Second Club */}
+
+                                <div className="col-md-6">
+
+                                    <label className="form-label">
+                                        Second Club <span className="text-muted">(optional)</span>
+                                    </label>
+
+                                    <select
+                                        name="second_club_id"
+                                        className="form-select"
+                                        value={form.second_club_id}
+                                        onChange={handleChange}
+                                    >
+
+                                        <option value="">
+                                            No second club
+                                        </option>
+
+                                        {clubs
+                                            .filter(club => club.id !== form.club_id)
+                                            .map(club => (
+                                                <option
+                                                    key={club.id}
+                                                    value={club.id}
+                                                >
+                                                    {club.name}
+                                                </option>
+                                            ))}
 
                                     </select>
 
@@ -1124,6 +1185,10 @@ function Players() {
                                         </th>
 
                                         <th>
+                                            Second Club
+                                        </th>
+
+                                        <th>
                                             BSA Number
                                         </th>
 
@@ -1167,11 +1232,19 @@ function Players() {
 
                                             <td>
 
-                                                {player.clubs?.short_name
-                                                    ? player.clubs.short_name
-                                                    : player.clubs?.name || "—"
+                                                {player.primary_club?.short_name
+                                                    ? player.primary_club.short_name
+                                                    : player.primary_club?.name || "—"
                                                 }
 
+                                            </td>
+
+
+                                            <td>
+                                                {(() => {
+                                                    const secondClub = clubs.find(club => club.id === player.second_club_id);
+                                                    return secondClub?.short_name || secondClub?.name || "—";
+                                                })()}
                                             </td>
 
 
