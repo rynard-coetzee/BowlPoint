@@ -7,7 +7,7 @@
  * - 3-5 teams: single round robin, one overall group (no sectional split/playoffs).
  * - 6-11 teams: 2 sections, one winner per section, final.
  * - 12-24 teams: 4 sections, one winner per section, semi-finals + final.
- * - 25-32 teams: 8 sections, one winner per section, quarter-finals + semi-finals + final.
+ * - 25-48 teams: 8 sections (3-6 teams per section), one winner per section, quarter-finals + semi-finals + final.
  * - Multiple-section mode: minimum 3 and maximum 6 teams per section.
  * - Single-group mode: all participants remain in one overall group; section limits do not apply.
  * - Odd section sizes are allowed; a bye counts as a round for scheduling.
@@ -63,10 +63,12 @@ function getSectionCount(teamCount) {
     if (teamCount <= 5) return 1;
     if (teamCount <= 11) return 2;
     if (teamCount <= 24) return 4;
-    if (teamCount <= 32) return 8;
+    // Eight sections support up to 48 teams while respecting the existing
+    // maximum of six teams per section and the established 8-winner playoff.
+    if (teamCount <= 48) return 8;
 
     throw new Error(
-        "BowlPoint Draw Engine currently supports a maximum of 32 teams."
+        "BowlPoint Draw Engine currently supports up to 48 teams in multiple-section mode. For larger competitions, use single-group mode or extend the playoff structure."
     );
 }
 
