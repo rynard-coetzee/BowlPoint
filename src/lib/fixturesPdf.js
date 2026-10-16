@@ -4,7 +4,7 @@
  * Layout is based on the club's printed fixture sheet:
  *   Num | Team Name (players + positions) | Club | R1 Opp/Rink | R2 Opp/Rink ...
  *
- * Rinks are intentionally blank until rink allocation is implemented.
+ * Venue and rink details are populated from saved facility allocations when available.
  * Uses the browser's native print dialog so no PDF library is required.
  */
 
@@ -318,287 +318,180 @@ export function exportCompetitionFixturesPdf({
 
     const rounds = [...(confirmedDraw.rounds || [])]
         .sort((a, b) => (a.round_number || 0) - (b.round_number || 0));
-
     const matches = confirmedDraw.matches || [];
+    const sections = [...(confirmedDraw.sections || [])]
+        .sort((a, b) => (a.section_number || 0) - (b.section_number || 0));
 
     if (!rounds.length || !matches.length) {
         window.alert("There are no fixtures to export yet.");
         return;
     }
 
-    const sections = (confirmedDraw.sections || [])
-        .slice()
-        .sort((a, b) => (a.section_number || 0) - (b.section_number || 0));
+    const teamId = team => team?.id;
+    // Team numbers in the database are competition-wide. For printed opposition
+    // labels, number teams independently within each club (e.g. SBC1, MBC2).
+    const allTeams = sections.flatMap(section => section.teams || []);
+    const clubTeamNumbers = new Map();
+    const teamsByClub = new Map();
+    allTeams.forEach(team => {
+        const clubKey = team.club_id || team.clubs?.id || getTeamClub(team) || "unknown";
+        if (!teamsByClub.has(clubKey)) teamsByClub.set(clubKey, []);
+        teamsByClub.get(clubKey).push(team);
+    });
+    teamsByClub.forEach(clubTeams => {
+        clubTeams.sort((a, b) =>
+            (Number(a.team_number) || 0) - (Number(b.team_number) || 0) ||
+            String(a.id).localeCompare(String(b.id))
+        );
+        clubTeams.forEach((team, index) => clubTeamNumbers.set(team.id, index + 1));
+    });
+    const teamLabel = team => {
+        if (!team) return "BYE";
+        const club = getTeamClub(team);
+        const localNumber = clubTeamNumbers.get(team.id);
+        return club && localNumber ? `${club}${localNumber}` : (team.team_name || team.name || "Team");
+    };
+    const matchForTeamRound = (team, round, section) => matches.find(match =>
+        match.round_id === round.id &&
+        (match.section_id === section.id || match.section?.id === section.id) &&
+        (match.team_a_id === team.id || match.team_b_id === team.id)
+    );
+    const getRinkLabel = match => {
+        const booking = match?.facility_booking || match?.facilityBooking || match?.booking || {};
+        const rink = booking.rink || booking.green_rinks || match?.rink || match?.green_rink || {};
+        const green = booking.green || match?.green || match?.club_green || {};
+        const rinkLabel = rink.label || rink.name || booking.rink_label || match?.rink_label || "";
+        const greenLabel = green.name || booking.green_label || match?.green_name || "";
+        const club = green.clubs || booking.club || {};
+        const clubLabel = club.short_name || club.name || booking.club_short_name || "";
+        const label = [clubLabel, greenLabel, rinkLabel].filter(Boolean).join(" / ");
+        return label || "—";
+    };
+    const getSchedule = (round, section = null) => {
+        const day = playingDays.find(item => item.id === round.competition_day_id) || round.competition_days || {};
+        const date = day.playing_date
+            ? new Date(`${day.playing_date}T00:00:00`).toLocaleDateString("en-ZA", { day: "2-digit", month: "2-digit", year: "numeric" })
+            : "";
+        const session = day.name || day.day_name || "";
+        // Facility allocation is the authoritative venue once greens have been
+        // assigned. A round can span several clubs, so list all allocated host clubs.
+        const allocatedClubs = [...new Set(matches
+            .filter(match => match.round_id === round.id && (!section || match.section_id === section.id || match.section?.id === section.id))
+            .map(match => {
+                const booking = match.facility_booking || match.facilityBooking || match.booking || {};
+                const green = booking.green || match.green || match.club_green || {};
+                return green.clubs?.short_name || green.clubs?.name || "";
+            })
+            .filter(Boolean))];
+        const venue = allocatedClubs.length
+            ? allocatedClubs.join(", ")
+            : (day.clubs?.short_name || day.clubs?.name || day.venue_name || "");
+        return { date, session, venue };
+    };
 
-    let content = "";
+    const sectionHtml = sections.map(section => {
+        const sectionRounds = rounds.filter(round => matches.some(match =>
+            match.round_id === round.id &&
+            (match.section_id === section.id || match.section?.id === section.id)
+        ));
+        const sectionTeams = [...(section.teams || [])].sort((a, b) =>
+            (a.team_number || 0) - (b.team_number || 0)
+        );
+        if (!sectionTeams.length) return "";
 
-    if (sections.length) {
-        content = sections
-            .map(section => buildSectionTable(section, rounds, matches, playingDays))
-            .join("");
+        const scheduleRows = sectionRounds.map(round => {
+            const schedule = getSchedule(round, section);
+            return `<tr>
+                <td>R${escapeHtml(round.round_number)}</td>
+                <td>${escapeHtml(schedule.date || "Date TBC")}${schedule.session ? ` ${escapeHtml(schedule.session)}` : ""}</td>
+                <td>${escapeHtml(schedule.venue || "Venue TBC")}</td>
+            </tr>`;
+        }).join("");
 
-        content += buildPlayoffHtml(rounds, matches, playingDays);
-    } else {
-        // No sections: retain a useful fixture list for straight round-robin/knockout events.
-        content = buildPlayoffHtml(rounds, matches, playingDays).replace("PLAYOFFS", "FIXTURES");
-    }
+        const teamCards = sectionTeams.map((team, teamIndex) => {
+            const gameRows = sectionRounds.map(round => {
+                const match = matchForTeamRound(team, round, section);
+                if (!match) return `<tr><td>${escapeHtml(round.round_number)}</td><td>—</td><td>—</td>`;
+                const isA = match.team_a_id === team.id;
+                const opponentId = isA ? match.team_b_id : match.team_a_id;
+                const opponent = isA ? match.teamB : match.teamA;
+                const isBye = !opponentId || !opponent;
+                return `<tr>
+                    <td>${escapeHtml(round.round_number)}</td>
+                    <td>${escapeHtml(isBye ? "BYE" : teamLabel(opponent))}</td>
+                    <td>${escapeHtml(isBye ? "—" : getRinkLabel(match))}</td>
+                </tr>`;
+            }).join("");
+            const members = getTeamMembers(team);
+            const club = getTeamClub(team);
+            const printedTeamName = team.team_name || team.name || teamLabel(team);
+            const teamTitle = members.length
+                ? `${teamIndex + 1}. ${printedTeamName} — ${members.join(" / ")}`
+                : `${teamIndex + 1}. ${printedTeamName}`;
+            return `<article class="team-card">
+                <div class="team-title">${escapeHtml(teamTitle)}</div>
+                <div class="team-club">${escapeHtml(club)}</div>
+                <table class="games">
+                    <thead><tr><th>Rnd</th><th>Opposition</th><th>Rink</th></tr></thead>
+                    <tbody>${gameRows}</tbody>
+                    <tfoot><tr><td colspan="2">Total</td><td>—</td></tr><tr><td colspan="2">Aggregate</td><td>0</td></tr></tfoot>
+                </table>
+            </article>`;
+        }).join("");
+
+        return `<section class="section">
+            <div class="section-heading">${escapeHtml(section.section_name || `Section ${section.section_number}`)}</div>
+            <div class="schedule">
+                <div class="schedule-title">Schedule</div>
+                <table><thead><tr><th>Rnd</th><th>Date / Session</th><th>Venue</th></tr></thead><tbody>${scheduleRows}</tbody></table>
+            </div>
+            <div class="team-grid">${teamCards}</div>
+        </section>`;
+    }).join("");
 
     const title = escapeHtml(competition.name || "BowlPoint Competition");
-    const venue = escapeHtml(
-        competition.host_club?.name ||
-        competition.host_club?.short_name ||
-        ""
-    );
-
-    const generatedDate = new Date().toLocaleDateString("en-ZA", {
-        day: "2-digit",
-        month: "long",
-        year: "numeric"
-    });
-
+    const generatedDate = new Date().toLocaleDateString("en-ZA", { day: "2-digit", month: "long", year: "numeric" });
     const printWindow = window.open("", "_blank", "width=1400,height=900");
-
     if (!printWindow) {
-        window.alert("Please allow pop-ups for BowlPoint to export the fixtures.");
+        window.alert("Please allow pop-ups for BowlPoint to generate the draw PDF.");
         return;
     }
 
-    printWindow.document.open();
-    printWindow.document.write(`
-        <!doctype html>
-        <html>
-        <head>
-            <meta charset="UTF-8" />
-            <title>${title} - Fixtures</title>
-            <style>
-                @page {
-                    size: A4 landscape;
-                    margin: 8mm;
-                }
-
-                * { box-sizing: border-box; }
-
-                html, body {
-                    margin: 0;
-                    padding: 0;
-                    background: #fff;
-                    color: #111;
-                    font-family: Arial, Helvetica, sans-serif;
-                }
-
-                body { font-size: 9px; }
-
-                .page-header {
-                    display: grid;
-                    grid-template-columns: auto 1fr auto;
-                    align-items: center;
-                    gap: 6px;
-                    margin-bottom: 8px;
-                }
-
-                .title-box {
-                    display: inline-block;
-                    padding: 5px 9px;
-                    border: 1.5px solid #111;
-                    background: #e000c8;
-                    font-size: 19px;
-                    font-weight: 800;
-                    line-height: 1;
-                    white-space: nowrap;
-                }
-
-                .host-name {
-                    font-size: 14px;
-                    font-weight: 800;
-                    padding-left: 2px;
-                }
-
-                .document-info {
-                    text-align: right;
-                    font-size: 8px;
-                    line-height: 1.35;
-                }
-
-                .document-info strong {
-                    font-size: 10px;
-                }
-
-                .section-block {
-                    margin-bottom: 7px;
-                    page-break-inside: avoid;
-                }
-
-                .fixture-table,
-                .playoff-table {
-                    width: 100%;
-                    border-collapse: collapse;
-                    table-layout: fixed;
-                    border: 1.2px solid #111;
-                }
-
-                .fixture-table th,
-                .fixture-table td,
-                .playoff-table th,
-                .playoff-table td {
-                    border: 1px solid #111;
-                    vertical-align: middle;
-                }
-
-                .fixture-table thead th {
-                    background: #c6c6c6;
-                    text-align: center;
-                    font-weight: 400;
-                }
-
-                .section-title {
-                    width: 40%;
-                    background: #ffc000 !important;
-                    text-align: left !important;
-                    padding: 5px 7px;
-                    font-size: 12px;
-                    font-weight: 800 !important;
-                }
-
-                .date-group {
-                    height: 23px;
-                    font-size: 10px;
-                    font-weight: 800 !important;
-                }
-
-                .round-group {
-                    height: 18px;
-                    font-size: 9px;
-                }
-
-                .time-cell {
-                    height: 18px;
-                    color: #e00000;
-                    font-weight: 800 !important;
-                }
-
-                .column-header th {
-                    height: 20px;
-                    background: #c6c6c6 !important;
-                    font-size: 8px;
-                    font-weight: 700 !important;
-                }
-
-                .num-head, .num-cell { width: 4%; text-align: center; }
-                .name-head, .name-cell { width: 31%; text-align: left; }
-                .club-head, .club-cell { width: 5%; text-align: center; }
-                .opp-col, .opp-cell { width: 7%; text-align: center; }
-                .rink-col, .rink-cell { width: 7%; text-align: center; }
-
-                .fixture-table tbody td {
-                    min-height: 21px;
-                    height: 21px;
-                    padding: 2px 4px;
-                    font-size: 8.5px;
-                }
-
-                .name-cell {
-                    overflow-wrap: anywhere;
-                }
-
-                .team-name {
-                    font-weight: 400;
-                }
-
-                .players {
-                    font-size: 7.3px;
-                    color: #333;
-                }
-
-                .club-cell {
-                    font-size: 8px !important;
-                    font-weight: 400;
-                }
-
-                .playoff-block {
-                    margin-top: 8px;
-                    page-break-inside: avoid;
-                }
-
-                .playoff-block h2 {
-                    margin: 0 0 5px;
-                    padding: 4px 6px;
-                    background: #ffc000;
-                    border: 1px solid #111;
-                    font-size: 11px;
-                }
-
-                .playoff-round {
-                    margin-bottom: 6px;
-                    page-break-inside: avoid;
-                }
-
-                .playoff-round-header {
-                    display: flex;
-                    justify-content: space-between;
-                    padding: 4px 6px;
-                    background: #c6c6c6;
-                    border: 1px solid #111;
-                    border-bottom: 0;
-                    font-size: 8.5px;
-                }
-
-                .playoff-table th {
-                    background: #ddd;
-                    font-size: 8px;
-                    padding: 3px;
-                }
-
-                .playoff-table td {
-                    font-size: 8.5px;
-                    padding: 3px 5px;
-                }
-
-                .playoff-table th:first-child,
-                .playoff-table td:first-child { width: 7%; text-align: center; }
-                .playoff-table th:nth-child(3),
-                .playoff-table td:nth-child(3) { width: 5%; text-align: center; }
-                .playoff-table th:last-child,
-                .playoff-table td:last-child { width: 9%; text-align: center; }
-
-                .footer {
-                    display: flex;
-                    justify-content: space-between;
-                    margin-top: 5px;
-                    font-size: 7px;
-                }
-
-                @media print {
-                    .section-block,
-                    .playoff-block,
-                    .playoff-round { break-inside: avoid; }
-                }
-            </style>
-        </head>
-        <body>
-            <div class="page-header">
-                <div class="title-box">${title}</div>
-                <div class="host-name">${venue}</div>
-                <div class="document-info">
-                    <strong>Playing Fixtures</strong><br />
-                    Generated: ${escapeHtml(generatedDate)}
-                </div>
-            </div>
-
-            ${content}
-
-            <div class="footer">
-                <span>${title} - Playing Fixtures</span>
-                <span>Page <span class="page-number"></span></span>
-            </div>
-
-            <script>
-                window.onload = function () {
-                    window.focus();
-                    window.print();
-                };
-            </script>
-        </body>
-        </html>
-    `);
+    printWindow.document.write(`<!doctype html>
+<html><head><meta charset="utf-8"><title>${title} - Draw</title>
+<style>
+@page { size: A4 landscape; margin: 8mm; }
+* { box-sizing: border-box; }
+body { font-family: Arial, Helvetica, sans-serif; color:#111; margin:0; font-size:10px; }
+header { text-align:center; margin-bottom:12px; }
+header h1 { font-size:23px; margin:0 0 3px; font-weight:800; }
+header h2 { font-size:20px; margin:0 0 6px; }
+header .subtitle { border:1px solid #111; padding:6px; font-size:11px; }
+.section { margin-bottom:14px; break-inside:avoid; }
+.section-heading { font-size:17px; font-weight:800; margin:0 0 5px; }
+.schedule { display:grid; grid-template-columns:100px 1fr; border:1px solid #222; margin-bottom:6px; min-height:52px; }
+.schedule-title { font-size:12px; font-weight:700; text-align:center; align-self:center; text-decoration:underline; }
+.schedule table { width:100%; border-collapse:collapse; }
+.schedule th { text-decoration:underline; font-weight:400; }
+.schedule th,.schedule td { text-align:center; padding:3px 5px; }
+.team-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px; align-items:start; }
+.team-card { min-width:0; break-inside:avoid; }
+.team-title { border:1px solid #111; min-height:31px; padding:4px; text-align:center; font-size:10px; line-height:1.2; overflow-wrap:anywhere; }
+.team-club { text-align:center; min-height:0; font-size:8px; padding:2px; }
+.games { width:100%; border-collapse:collapse; table-layout:fixed; }
+.games th,.games td { border:1px solid #111; text-align:center; padding:3px 2px; height:20px; overflow-wrap:anywhere; }
+.games th { font-weight:400; background:#eee; }
+.games th:first-child,.games td:first-child { width:13%; }
+.games th:nth-child(2),.games td:nth-child(2) { width:52%; }
+.games th:last-child,.games td:last-child { width:35%; }
+.games tfoot td { font-weight:400; }
+.games tfoot tr:first-child td:last-child { background:#f00; }
+@media print { .section { break-inside:avoid; } }
+</style></head><body>
+<header><h1>DISTRICT COMPETITIONS</h1><h2>${title}</h2><div class="subtitle">Competition Draw and Playing Schedule</div></header>
+${sectionHtml || `<p>No sectional team blocks are available for this draw.</p>`}
+<footer style="margin-top:8px;font-size:8px;display:flex;justify-content:space-between"><span>${title} · Draw</span><span>Generated ${escapeHtml(generatedDate)}</span></footer>
+<script>window.onload=function(){window.focus();window.print();};</script>
+</body></html>`);
     printWindow.document.close();
 }

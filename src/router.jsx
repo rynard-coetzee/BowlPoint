@@ -9,6 +9,9 @@ import AppLayout from "./layouts/AppLayout";
 import Dashboard from "./pages/Dashboard/Dashboard";
 import Competitions from "./pages/Competitions/Competitions";
 import Clubs from "./pages/Clubs/Clubs";
+import Facilities from "./pages/Clubs/Facilities";
+import FacilityAllocation from "./pages/Clubs/FacilityAllocation";
+import FacilityCalendar from "./pages/Clubs/FacilityCalendar";
 import Players from "./pages/Players/Players";
 import Teams from "./pages/Teams/Teams";
 import Reports from "./pages/Reports/Reports";
@@ -132,6 +135,22 @@ const router = createBrowserRouter([
                 path: "clubs",
                 element: <ProtectedRoute roles={["admin", "comp_secretary"]} />,
                 children: [{ index: true, element: <Clubs /> }]
+            },
+
+            {
+                path: "facilities",
+                element: <ProtectedRoute roles={["admin", "comp_secretary"]} />,
+                children: [{ index: true, element: <Facilities /> }]
+            },
+            {
+                path: "facility-calendar",
+                element: <ProtectedRoute roles={["admin", "comp_secretary"]} />,
+                children: [{ index: true, element: <FacilityCalendar /> }]
+            },
+            {
+                path: "facilities/allocation/:competitionId",
+                element: <ProtectedRoute roles={["admin", "comp_secretary"]} />,
+                children: [{ index: true, element: <FacilityAllocation /> }]
             },
 
 

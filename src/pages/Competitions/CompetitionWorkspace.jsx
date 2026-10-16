@@ -21,6 +21,7 @@ function getSectionByeTeam(section, roundNumber) {
 import { generateCompetitionDrawProposal } from "./competitionDrawEngine";
 import { buildCompetitionScheduleProposal } from "./competitionScheduleEngine";
 import CompetitionLiveCard from "./CompetitionLiveCard";
+import { exportCompetitionFixturesPdf } from "../../lib/fixturesPdf";
 
 function CompetitionWorkspace() {
     const { competitionId } = useParams();
@@ -731,11 +732,6 @@ function CompetitionWorkspace() {
                 return;
             }
 
-            if (!assignment.venue_club_id) {
-                alert(`Please select a venue for ${assignment.label}.`);
-                return;
-            }
-
             if (!isValidScheduleDate(assignment.playing_date, assignment.label, competitionType)) {
                 if (competitionType === "weekend") {
                     const expected = assignment.label.includes("Saturday") ? "Saturday" : "Sunday";
@@ -772,7 +768,9 @@ function CompetitionWorkspace() {
                     day_number: assignment.dayNumber,
                     playing_date: assignment.playing_date,
                     name: assignment.name?.trim() || assignment.label,
-                    venue_club_id: assignment.venue_club_id,
+                    // Venue is intentionally left unset here. The rink allocator
+                    // assigns a host club per match after checking shared capacity.
+                    venue_club_id: null,
                     status: assignment.status || "scheduled",
                     updated_at: new Date().toISOString()
                 };
@@ -2719,7 +2717,7 @@ function CompetitionWorkspace() {
             <span className={className}>
                 <strong>{baseName}</strong>
                 {playerNames.length > 0 && (
-                    <span className="d-block small text-muted fw-normal mt-1">
+                    <span className="small text-muted fw-normal ms-1">
                         ({playerNames.join(", ")})
                     </span>
                 )}
@@ -4612,11 +4610,11 @@ function CompetitionWorkspace() {
                             <div>
                                 <h6 className="mb-1">Assign Actual Dates & Venues</h6>
                                 <div className="small text-muted">
-                                    The draw and round order are already confirmed. You are only assigning the proposed playing days to real calendar dates and venues.
+                                    The draw and round order are already confirmed. Assign the real playing dates first; the rink allocator will determine the host club and green for each individual game.
                                 </div>
                             </div>
-                            <span className={`badge ${scheduleAssignments.length && scheduleAssignments.every(item => item.playing_date && item.venue_club_id) && confirmedDraw.rounds.every(round => round.competition_day_id) ? "bg-success" : "bg-secondary"}`}>
-                                {scheduleAssignments.length && scheduleAssignments.every(item => item.playing_date && item.venue_club_id) && confirmedDraw.rounds.every(round => round.competition_day_id) ? "Schedule assigned" : "Dates & venues required"}
+                            <span className={`badge ${scheduleAssignments.length && scheduleAssignments.every(item => item.playing_date) && confirmedDraw.rounds.every(round => round.competition_day_id) ? "bg-success" : "bg-secondary"}`}>
+                                {scheduleAssignments.length && scheduleAssignments.every(item => item.playing_date) && confirmedDraw.rounds.every(round => round.competition_day_id) ? "Dates assigned" : "Dates required"}
                             </span>
                         </div>
 
@@ -4647,19 +4645,13 @@ function CompetitionWorkspace() {
                                                 </div>
                                             </div>
                                             <div className="col-lg-4">
-                                                <label className="form-label">Venue</label>
-                                                <select
-                                                    className="form-select"
-                                                    value={assignment.venue_club_id}
-                                                    onChange={e => handleScheduleAssignmentChange(index, "venue_club_id", e.target.value)}
-                                                >
-                                                    <option value="">Select venue...</option>
-                                                    {clubs.map(club => (
-                                                        <option key={club.id} value={club.id}>
-                                                            {club.name}
-                                                        </option>
-                                                    ))}
-                                                </select>
+                                                <label className="form-label">Venue allocation</label>
+                                                <div className="form-control bg-light text-muted">
+                                                    Assigned per game by the rink allocator
+                                                </div>
+                                                <div className="small text-muted mt-1">
+                                                    Club, green and rink will be selected after dates are saved.
+                                                </div>
                                             </div>
                                             <div className="col-lg-2">
                                                 <label className="form-label">Day Name</label>
@@ -4676,7 +4668,10 @@ function CompetitionWorkspace() {
                             ))}
                         </div>
 
-                        <div className="d-flex justify-content-end gap-2 mt-4">
+                        <div className="d-flex flex-wrap justify-content-between gap-2 mt-4">
+                            <button type="button" className="btn btn-outline-primary" onClick={() => navigate(`/facilities/allocation/${competitionId}`)}>
+                                <i className="bi bi-grid-3x3-gap me-2"></i>Allocate Club Greens & Rinks
+                            </button>
                             <button
                                 type="button"
                                 className="btn btn-primary"
@@ -4713,11 +4708,76 @@ function CompetitionWorkspace() {
                                 The confirmed fixtures grouped by their assigned playing day and round.
                             </div>
                         </div>
-                        <span className={`badge ${confirmedDraw.rounds.length && confirmedDraw.rounds.every(round => round.competition_day_id) ? "bg-success" : "bg-secondary"}`}>
+                        <div className="d-flex align-items-center gap-2">
+                            <button
+                                type="button"
+                                className="btn btn-outline-primary btn-sm"
+                                onClick={async () => {
+                                    try {
+                                    // Keep the booking query to base-table columns. A nested
+                                    // green_rinks relationship here is not reliable across the
+                                    // deployed schema versions; if PostgREST rejects it, the old
+                                    // code silently exported no bookings and every rink became —.
+                                    const { data: bookings, error: bookingsError } = await supabase
+                                        .from("facility_bookings")
+                                        .select("match_id,competition_id,green_id,rink_id,playing_date,session_name,direction,status")
+                                        .eq("competition_id", competitionId)
+                                        .neq("status", "cancelled");
+                                    if (bookingsError) throw bookingsError;
+                                    const activeBookings = bookings || [];
+                                    const greenIds = [...new Set(activeBookings.map(item => item.green_id).filter(Boolean))];
+                                    const rinkIds = [...new Set(activeBookings.map(item => item.rink_id).filter(Boolean))];
+                                    const [{ data: greens, error: greensError }, { data: rinks, error: rinksError }] = await Promise.all([
+                                        greenIds.length
+                                            ? supabase.from("club_greens").select("id,name,club_id,clubs(id,short_name,name)").in("id", greenIds)
+                                            : Promise.resolve({ data: [], error: null }),
+                                        rinkIds.length
+                                            ? supabase.from("green_rinks").select("id,green_id,label").in("id", rinkIds)
+                                            : Promise.resolve({ data: [], error: null })
+                                    ]);
+                                    if (greensError) throw greensError;
+                                    if (rinksError) throw rinksError;
+                                    const greenById = new Map((greens || []).map(item => [String(item.id), item]));
+                                    const rinkById = new Map((rinks || []).map(item => [String(item.id), item]));
+                                    const bookingByMatchId = new Map(activeBookings.map(item => [String(item.match_id), item]));
+                                    const exportDraw = {
+                                        ...confirmedDraw,
+                                        matches: (confirmedDraw.matches || []).map(match => {
+                                            const booking = bookingByMatchId.get(String(match.id));
+                                            if (!booking) return match;
+                                            const green = greenById.get(String(booking.green_id)) || null;
+                                            const rink = rinkById.get(String(booking.rink_id)) || null;
+                                            return {
+                                                ...match,
+                                                facility_booking: {
+                                                    ...booking,
+                                                    green,
+                                                    rink,
+                                                    rink_label: rink?.label || rink?.name || "",
+                                                    // Retain explicit labels as a final fallback if a
+                                                    // legacy booking has no resolvable rink foreign key.
+                                                    green_label: green?.name || "",
+                                                    club: green?.clubs || null
+                                                }
+                                            };
+                                        })
+                                    };
+                                    exportCompetitionFixturesPdf({ competition, confirmedDraw: exportDraw, playingDays });
+                                    } catch (error) {
+                                        console.error("Download Draw PDF failed:", error);
+                                        window.alert(`Unable to download the draw PDF: ${error?.message || "An unexpected error occurred."}`);
+                                    }
+                                }}
+                            >
+                                <i className="bi bi-file-earmark-pdf me-2"></i>
+                                Download Draw PDF
+                            </button>
+                            <span className={`badge ${confirmedDraw.rounds.length && confirmedDraw.rounds.every(round => round.competition_day_id) ? "bg-success" : "bg-secondary"}`}>
                             {confirmedDraw.rounds.length && confirmedDraw.rounds.every(round => round.competition_day_id)
                                 ? "Scheduled"
                                 : "Awaiting schedule"}
-                        </span>
+                            </span>
+                        </div>
                     </div>
 
                     <div className="card-body">
@@ -4725,7 +4785,7 @@ function CompetitionWorkspace() {
                             const getTeamLabel = (match, side) => {
                                 const team = side === "a" ? match.teamA : match.teamB;
                                 if (team) {
-                                    return getTeamDisplayName(team);
+                                    return <TeamDisplay team={team} />;
                                 }
 
                                 const roundNumber = match.round?.round_number;

@@ -26,6 +26,19 @@ const navigation = [
     },
 
     {
+        title: "Club Facilities",
+        roles: ["admin", "comp_secretary"],
+        path: "/facilities",
+        icon: "grid-3x3-gap-fill"
+    },
+    {
+        title: "Facility Calendar",
+        roles: ["admin", "comp_secretary"],
+        path: "/facility-calendar",
+        icon: "calendar-week-fill"
+    },
+
+    {
         title: "Players",
         roles: ["admin", "comp_secretary"],
         path: "/players",
