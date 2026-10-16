@@ -102,6 +102,11 @@ function CompetitionLive() {
     const [rounds, setRounds] = useState([]);
     const [sections, setSections] = useState([]);
     const [matches, setMatches] = useState([]);
+    const [facilityBookings, setFacilityBookings] = useState([]);
+    const [facilityGreens, setFacilityGreens] = useState([]);
+    const [facilityRinks, setFacilityRinks] = useState([]);
+    const [sectionVenueRows, setSectionVenueRows] = useState([]);
+    const [venueClubs, setVenueClubs] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
     const [lastUpdated, setLastUpdated] = useState(null);
@@ -127,7 +132,7 @@ function CompetitionLive() {
 
         const competitionId = competitionResult.data.id;
 
-        const [teamsResult, roundsResult, sectionsResult, matchesResult] = await Promise.all([
+        const [teamsResult, roundsResult, sectionsResult, matchesResult, bookingsResult, greensResult, rinksResult, sectionVenuesResult, clubsResult] = await Promise.all([
             supabase
                 .from("competition_teams")
                 .select(`
@@ -172,13 +177,48 @@ function CompetitionLive() {
                 .from("competition_matches")
                 .select("id, competition_id, round_id, section_id, match_number, team_a_id, team_b_id, score_a, score_b, skins_a, skins_b, completed, completed_at, next_match_id, next_match_slot")
                 .eq("competition_id", competitionId)
-                .order("match_number")
+                .order("match_number"),
+            supabase
+                .from("facility_bookings")
+                .select("id, competition_id, match_id, green_id, rink_id, playing_date, session_name, starts_at, ends_at, status")
+                .eq("competition_id", competitionId)
+                .neq("status", "cancelled"),
+            supabase
+                .from("club_greens")
+                .select("id, name, club_id")
+                .order("name"),
+            supabase
+                .from("green_rinks")
+                .select("id, label, green_id"),
+            supabase
+                .from("competition_section_venues")
+                .select("section_id, club_id")
+                .eq("competition_id", competitionId),
+            supabase
+                .from("clubs")
+                .select("id, name, short_name")
         ]);
 
         if (teamsResult.error) throw teamsResult.error;
         if (roundsResult.error) throw roundsResult.error;
         if (sectionsResult.error) throw sectionsResult.error;
         if (matchesResult.error) throw matchesResult.error;
+        if (bookingsResult.error) throw bookingsResult.error;
+        if (greensResult.error) throw greensResult.error;
+        if (rinksResult.error) throw rinksResult.error;
+        if (sectionVenuesResult.error) throw sectionVenuesResult.error;
+        if (clubsResult.error) throw clubsResult.error;
+
+        const activeBookings = bookingsResult.data || [];
+        const greenRows = greensResult.data || [];
+        const rinkRows = rinksResult.data || [];
+        const venueRows = sectionVenuesResult.data || [];
+        const clubRows = clubsResult.data || [];
+        const bookingByMatchId = new Map(activeBookings.map(booking => [booking.match_id, booking]));
+        const greenById = new Map(greenRows.map(green => [green.id, green]));
+        const rinkById = new Map(rinkRows.map(rink => [rink.id, rink]));
+        const venueClubBySectionId = new Map(venueRows.map(row => [row.section_id, row.club_id]));
+        const clubById = new Map(clubRows.map(club => [club.id, club]));
 
         const teamById = new Map((teamsResult.data || []).map(team => [team.id, team]));
         const roundById = new Map((roundsResult.data || []).map(round => [round.id, round]));
@@ -206,7 +246,8 @@ function CompetitionLive() {
             ...match,
             teamA: teamById.get(match.team_a_id),
             teamB: teamById.get(match.team_b_id),
-            round: roundById.get(match.round_id)
+            round: roundById.get(match.round_id),
+            facilityBooking: bookingByMatchId.get(match.id) || null
         }));
 
         setCompetition(competitionResult.data);
@@ -214,6 +255,11 @@ function CompetitionLive() {
         setRounds(roundsResult.data || []);
         setSections(hydratedSections);
         setMatches(hydratedMatches);
+        setFacilityBookings(activeBookings);
+        setFacilityGreens(greenRows);
+        setFacilityRinks(rinkRows);
+        setSectionVenueRows(venueRows);
+        setVenueClubs(clubRows);
         setLastUpdated(new Date());
         setLoading(false);
     }, [publicCode]);
@@ -330,6 +376,25 @@ function CompetitionLive() {
                 )}
             </span>
         );
+    };
+
+    const getSectionVenueName = (section) => {
+        const clubId = section ? sectionVenueRows.find(row => row.section_id === section.id)?.club_id : null;
+        const club = clubId ? venueClubs.find(item => item.id === clubId) : null;
+        return club?.name || club?.short_name || null;
+    };
+
+    const getMatchRinkLabel = (match) => {
+        const booking = match?.facilityBooking || facilityBookings.find(item => item.match_id === match?.id);
+        if (!booking) return "Rink TBC";
+        const green = facilityGreens.find(item => item.id === booking.green_id);
+        const rink = facilityRinks.find(item => item.id === booking.rink_id);
+        const venue = green ? venueClubs.find(item => item.id === green.club_id) : null;
+        const parts = [];
+        if (green?.name) parts.push(green.name);
+        if (rink?.label) parts.push(`Rink ${rink.label}`);
+        if (parts.length === 0) return "Rink TBC";
+        return `${parts.join(" · ")}${venue?.name ? ` — ${venue.name}` : ""}`;
     };
 
     const sectionalRoundNumber = useMemo(() => {
@@ -538,7 +603,10 @@ function CompetitionLive() {
                                     <div className="col-12" key={section.id}>
                                         <div className="card shadow-sm border-0 h-100">
                                             <div className="card-header bg-white d-flex justify-content-between align-items-center">
-                                                <strong>{section.section_name}</strong>
+                                                <div>
+                                                    <strong>{section.section_name}</strong>
+                                                    {getSectionVenueName(section) && <div className="small text-muted mt-1"><i className="bi bi-geo-alt me-1"></i>{getSectionVenueName(section)}</div>}
+                                                </div>
                                                 <span className={`badge ${complete ? "bg-success" : "bg-secondary"}`}>
                                                     {complete ? "Complete" : `${sectionMatches.filter(match => match.completed).length}/${sectionMatches.length}`}
                                                 </span>
@@ -597,7 +665,10 @@ function CompetitionLive() {
                                 return (
                                     <div className="border rounded mb-3" key={section.id}>
                                         <div className="bg-light border-bottom px-3 py-2 d-flex justify-content-between align-items-center">
-                                            <strong>{section.section_name}</strong>
+                                            <div>
+                                                <strong>{section.section_name}</strong>
+                                                {getSectionVenueName(section) && <div className="small text-muted mt-1"><i className="bi bi-geo-alt me-1"></i>{getSectionVenueName(section)}</div>}
+                                            </div>
                                             <span className="small text-muted">{sectionMatches.filter(m => m.completed).length}/{sectionMatches.length} complete</span>
                                         </div>
                                         <div className="table-responsive">
@@ -650,6 +721,14 @@ function CompetitionLive() {
                                                                         </span>
                                                                     </td>
                                                                 </tr>
+                                                                {match.team_a_id && match.team_b_id && (
+                                                                    <tr key={`rink-${match.id}`} className="bg-light">
+                                                                        <td colSpan={6} className="small text-muted py-1">
+                                                                            <i className="bi bi-geo-alt me-1"></i>
+                                                                            {getMatchRinkLabel(match)}
+                                                                        </td>
+                                                                    </tr>
+                                                                )}
                                                                 {byeTeam && (
                                                                     <tr key={`bye-${section.id}-${match.round_id}`} className="table-warning">
                                                                         <td className="small">{match.round?.round_name || `Round ${match.round?.round_number || ""}`}</td>
