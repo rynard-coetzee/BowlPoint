@@ -19,6 +19,7 @@ function getSectionByeTeam(section, roundNumber) {
     return (section.teams || []).find(team => !playingTeamIds.has(team.id)) || null;
 }
 import { generateCompetitionDrawProposal } from "./competitionDrawEngine";
+import { buildOfficialLadiesDistrictPairsProposal } from "./officialLadiesDistrictPairs";
 import { buildCompetitionScheduleProposal } from "./competitionScheduleEngine";
 import CompetitionLiveCard from "./CompetitionLiveCard";
 import { exportCompetitionFixturesPdf } from "../../lib/fixturesPdf";
@@ -45,6 +46,7 @@ function CompetitionWorkspace() {
     const [confirmedDraw, setConfirmedDraw] = useState(null);
     const [scheduleProposal, setScheduleProposal] = useState(null);
     const [scheduleAssignments, setScheduleAssignments] = useState([]);
+    const [scorecardSummary, setScorecardSummary] = useState({ clubs: [], total: 0, unassigned: 0 });
 
     // Results / live scoring state.
     const [selectedMatch, setSelectedMatch] = useState(null);
@@ -436,6 +438,15 @@ function CompetitionWorkspace() {
             .select("id, competition_id, round_id, section_id, match_number, team_a_id, team_b_id, score_a, score_b, skins_a, skins_b, completed, next_match_id, next_match_slot")
             .eq("competition_id", competitionId);
 
+        const sectionVenuesResult = await supabase
+            .from("competition_section_venues")
+            .select("section_id, club_id")
+            .eq("competition_id", competitionId);
+
+        if (sectionVenuesResult.error) {
+            console.error("Error loading section host clubs for scorecard totals:", sectionVenuesResult.error);
+        }
+
         if (matchesResult.error) {
             console.error("Error loading draw matches:", matchesResult.error);
             alert(`Unable to load draw matches.\n\n${matchesResult.error.message}`);
@@ -447,6 +458,41 @@ function CompetitionWorkspace() {
         const roundById = new Map((roundsResult.data || []).map(round => [round.id, round]));
         const persistedSections = sectionsResult.data || [];
         const persistedMatches = matchesResult.data || [];
+
+        // One scorecard is required per fixture. Sectional fixtures use the
+        // saved section host; playoff fixtures fall back to the saved day venue.
+        const sectionVenueById = new Map(
+            (sectionVenuesResult.data || []).map(row => [row.section_id, row.club_id])
+        );
+        const scorecardsByClub = new Map();
+        let unassignedScorecards = 0;
+        persistedMatches.forEach(match => {
+            if (!match.team_a_id || !match.team_b_id ||
+                !teamById.has(match.team_a_id) || !teamById.has(match.team_b_id)) return;
+
+            const round = roundById.get(match.round_id);
+            const day = round?.competition_days;
+            const hostClubId = match.section_id
+                ? sectionVenueById.get(match.section_id)
+                : day?.venue_club_id;
+
+            if (!hostClubId) {
+                unassignedScorecards += 1;
+                return;
+            }
+
+            const club = (clubsResult.data || []).find(item => item.id === hostClubId);
+            const clubName = club?.name || day?.clubs?.name || "Unknown host club";
+            const existing = scorecardsByClub.get(hostClubId) || { clubId: hostClubId, clubName, count: 0 };
+            existing.count += 1;
+            scorecardsByClub.set(hostClubId, existing);
+        });
+        const scorecardClubRows = [...scorecardsByClub.values()].sort((a, b) => a.clubName.localeCompare(b.clubName));
+        setScorecardSummary({
+            clubs: scorecardClubRows,
+            total: scorecardClubRows.reduce((sum, row) => sum + row.count, 0),
+            unassigned: unassignedScorecards
+        });
 
         setConfirmedDraw(persistedSections.length ? {
             sections: persistedSections.map(section => ({
@@ -2183,6 +2229,26 @@ function CompetitionWorkspace() {
         }
     };
 
+    const handleLoadOfficialLadiesDraw = () => {
+        const activeTeams = teams
+            .filter(team => team.status === "active")
+            .map(team => ({
+                id: team.id,
+                name: getTeamBaseName(team),
+                playerNames: getTeamPlayerNames(team),
+                clubId: team.club_id || null,
+                clubName: team.clubs?.name || team.clubs?.short_name || null
+            }));
+        try {
+            const proposal = buildOfficialLadiesDistrictPairsProposal(activeTeams, drawType);
+            setDrawProposal(proposal);
+            setShowDrawPlanner(true);
+        } catch (error) {
+            console.error("Unable to load official ladies draw proposal:", error);
+            alert(`Unable to load the official ladies draw.\n\n${error.message}`);
+        }
+    };
+
     const clearDrawProposal = () => {
         setDrawProposal(null);
         setShowDrawPlanner(false);
@@ -3158,6 +3224,47 @@ function CompetitionWorkspace() {
 
             </div>
 
+
+            {/* Scorecards required, calculated from saved fixtures and approved host venues */}
+            {confirmedDraw && (
+                <div className="card shadow-sm border-0 mb-4">
+                    <div className="card-header bg-white">
+                        <h5 className="mb-1">Scorecards Required</h5>
+                        <div className="text-muted small">
+                            One scorecard per fixture, grouped by the saved host club.
+                        </div>
+                    </div>
+                    <div className="card-body">
+                        {scorecardSummary.clubs.length ? (
+                            <>
+                                <div className="row g-3">
+                                    {scorecardSummary.clubs.map(club => (
+                                        <div className="col-sm-6 col-lg-4" key={club.clubId}>
+                                            <div className="border rounded p-3 h-100 d-flex justify-content-between align-items-center gap-3">
+                                                <span>{club.clubName}</span>
+                                                <span className="fs-3 fw-bold">{club.count}</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="d-flex justify-content-between align-items-center border-top mt-3 pt-3">
+                                    <span className="fw-semibold">Total scorecards required</span>
+                                    <span className="fs-2 fw-bold">{scorecardSummary.total}</span>
+                                </div>
+                                {scorecardSummary.unassigned > 0 && (
+                                    <div className="alert alert-warning mt-3 mb-0">
+                                        {scorecardSummary.unassigned} fixture(s) have both teams assigned but no saved host venue, so they are not included in the club totals yet.
+                                    </div>
+                                )}
+                            </>
+                        ) : (
+                            <div className="text-muted">
+                                No scorecard totals are available yet. Approve the section host clubs and assign venues to any playoff rounds to calculate the totals.
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
 
             {/* Players by Club */}
 
@@ -4179,6 +4286,21 @@ function CompetitionWorkspace() {
                             </div>
 
 
+                            {(competition?.name || "").toLowerCase().includes("ladies") &&
+                                (competition?.name || "").toLowerCase().includes("pairs") && (
+                                <div className="col-md-5">
+                                    <button
+                                        type="button"
+                                        className="btn btn-outline-primary"
+                                        onClick={handleLoadOfficialLadiesDraw}
+                                        disabled={confirmingDraw || teams.filter(team => team.status === "active").length !== 27}
+                                    >
+                                        Load Official Ladies Draw (27 teams)
+                                    </button>
+                                    <div className="form-text">Loads the secretary's section assignments, opponents and byes into a local proposal for review. It does not save anything.</div>
+                                </div>
+                            )}
+
                             <div className="col-md-4">
 
                                 <div className="text-muted small">
@@ -4312,9 +4434,11 @@ function CompetitionWorkspace() {
 
                                     <div className="small mt-2">
 
-                                        {drawProposal.recommendedPlan.schedule.competitionType === "weekend"
-                                            ? `${drawProposal.recommendedPlan.schedule.saturdaySectionalRounds} sectional round(s) Saturday + ${drawProposal.recommendedPlan.schedule.sundaySectionalRounds} sectional round(s) Sunday, followed by ${drawProposal.recommendedPlan.schedule.playoffRoundsOnSunday} playoff round(s) where required.`
-                                            : `${drawProposal.recommendedPlan.totalRounds} playing day(s) required at one round per day.`}
+                                        {drawProposal.source === "official_ladies_district_pairs_pdf"
+                                            ? "Official sectional pairings and byes loaded from the secretary's draw. Confirming creates the fixtures; dates, Riverside venues and rink allocations must be set in the Playing Schedule."
+                                            : drawProposal.recommendedPlan.schedule.competitionType === "weekend"
+                                                ? `${drawProposal.recommendedPlan.schedule.saturdaySectionalRounds} sectional round(s) Saturday + ${drawProposal.recommendedPlan.schedule.sundaySectionalRounds} sectional round(s) Sunday, followed by ${drawProposal.recommendedPlan.schedule.playoffRoundsOnSunday} playoff round(s) where required.`
+                                                : `${drawProposal.recommendedPlan.totalRounds} playing day(s) required at one round per day.`}
 
                                     </div>
 
@@ -4708,7 +4832,16 @@ function CompetitionWorkspace() {
                                 The confirmed fixtures grouped by their assigned playing day and round.
                             </div>
                         </div>
-                        <div className="d-flex align-items-center gap-2">
+                        <div className="d-flex align-items-center gap-2 flex-wrap">
+                            <button
+                                type="button"
+                                className="btn btn-outline-success btn-sm"
+                                onClick={() => navigate(`/facilities/allocation/${competitionId}`)}
+                                title="Open rink allocation for this competition"
+                            >
+                                <i className="bi bi-grid-3x3-gap me-2"></i>
+                                Rink Allocations
+                            </button>
                             <button
                                 type="button"
                                 className="btn btn-outline-primary btn-sm"

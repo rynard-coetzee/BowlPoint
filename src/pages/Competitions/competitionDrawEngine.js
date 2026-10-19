@@ -6,9 +6,9 @@
  * Rules captured from the competition-secretary feedback:
  * - 3-5 teams: single round robin, one overall group (no sectional split/playoffs).
  * - 6-11 teams: 2 sections, one winner per section, final.
- * - 12-24 teams: 4 sections, one winner per section, semi-finals + final.
- * - 25-48 teams: 8 sections (3-6 teams per section), one winner per section, quarter-finals + semi-finals + final.
- * - Multiple-section mode: minimum 3 and maximum 6 teams per section.
+ * - 12-28 teams: 4 sections, one winner per section, semi-finals + final.
+ * - 29-48 teams: 8 sections (3-6 teams per section), one winner per section, quarter-finals + semi-finals + final.
+ * - Multiple-section mode: normally 3-6 teams per section; four-section competitions with 25-28 teams may have 7 teams per section.
  * - Single-group mode: all participants remain in one overall group; section limits do not apply.
  * - Odd section sizes are allowed; a bye counts as a round for scheduling.
  * - Teams from the same club should be separated where possible.
@@ -62,9 +62,11 @@ function assertTeams(teams) {
 function getSectionCount(teamCount) {
     if (teamCount <= 5) return 1;
     if (teamCount <= 11) return 2;
-    if (teamCount <= 24) return 4;
-    // Eight sections support up to 48 teams while respecting the existing
-    // maximum of six teams per section and the established 8-winner playoff.
+    // Prefer four sections through 28 teams. This supports established
+    // draws such as 27 teams in sections of 7 / 7 / 7 / 6.
+    if (teamCount <= 28) return 4;
+    // Above 28 teams, use eight sections so each section remains between
+    // three and six teams and the eight-winner playoff structure is retained.
     if (teamCount <= 48) return 8;
 
     throw new Error(
@@ -83,15 +85,21 @@ function getSectionSizes(teamCount, sectionCount) {
         (_, index) => base + (index < remainder ? 1 : 0)
     );
 
+    // Four-section draws with 25-28 teams may legitimately contain up to
+    // seven teams per section (e.g. the official 27-team ladies draw).
+    const maximumAllowedSize = sectionCount === 4 && teamCount > 24 && teamCount <= 28
+        ? 7
+        : MAX_SECTION_SIZE;
+
     if (
         sizes.some(
             size =>
                 size < MIN_SECTION_SIZE ||
-                size > MAX_SECTION_SIZE
+                size > maximumAllowedSize
         )
     ) {
         throw new Error(
-            `Cannot distribute ${teamCount} teams across ${sectionCount} sections while keeping every section between ${MIN_SECTION_SIZE} and ${MAX_SECTION_SIZE} teams.`
+            `Cannot distribute ${teamCount} teams across ${sectionCount} sections while keeping every section between ${MIN_SECTION_SIZE} and ${maximumAllowedSize} teams.`
         );
     }
 
@@ -483,7 +491,9 @@ function createCompetitionPlan({ teams, competitionType, sectionCount, variant, 
         }),
         rules: {
             minimumSectionSize: MIN_SECTION_SIZE,
-            maximumSectionSize: MAX_SECTION_SIZE,
+            maximumSectionSize: sectionCount === 4 && teams.length > 24 && teams.length <= 28
+                ? 7
+                : MAX_SECTION_SIZE,
             qualifierPerSection: 1,
             aggregateTieBreaker: "shots_for_minus_shots_against",
             repeatOpponents: false,
