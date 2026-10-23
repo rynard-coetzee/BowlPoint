@@ -280,7 +280,7 @@ function CompetitionWorkspace() {
             );
 
             alert(
-                `Unable to load players.\n\n${playersResult.error.message}`
+                `Unable to save team.\n\n${error?.message || "An unexpected error occurred."}`
             );
 
             setLoading(false);
@@ -632,7 +632,7 @@ function CompetitionWorkspace() {
         }, 80);
 
         return () => clearTimeout(timer);
-    }, [showTeamForm]);
+    }, [showTeamForm, editingTeam]);
 
     useEffect(() => {
         // Automatically roll up a section once all of its sectional games are
@@ -1415,6 +1415,10 @@ function CompetitionWorkspace() {
                     item.player_id;
             });
 
+        // The edit form is rendered near the top of the Teams section. Set the
+        // same scroll flag used by Add Team so Edit visibly opens the form,
+        // even when the secretary clicked a team much farther down the page.
+        shouldScrollToTeamFormRef.current = true;
         setEditingTeam(team);
 
         setTeamForm({
@@ -1438,7 +1442,12 @@ function CompetitionWorkspace() {
 
         setTeamForm(prev => ({
             ...prev,
-            [name]: value
+            [name]: value,
+            // A team moved to another club must be rebuilt from that club's
+            // eligible players; do not accidentally retain the old roster.
+            ...(name === "club_id" && String(prev.club_id || "") !== String(value || "")
+                ? { players: {} }
+                : {})
         }));
 
         if (name === "club_id") {
@@ -1513,6 +1522,37 @@ function CompetitionWorkspace() {
             return;
         }
 
+        // After a draw has been confirmed, editing a team changes the roster
+        // occupying that existing draw position. Keep the competition_team id
+        // and team_number stable so fixture references, section membership,
+        // scheduled dates, venues and rink bookings are not regenerated.
+        if (editingTeam && confirmedDraw) {
+            const existingNames = (editingTeam.competition_team_players || [])
+                .map(item => item.players ? playerName(item.players) : "")
+                .filter(Boolean);
+            const selectedNames = positions
+                .map(position => {
+                    const player = clubPlayers.find(item => String(item.id) === String(teamForm.players[position.key]));
+                    return player ? playerName(player) : "a selected player";
+                });
+            const changed = String(editingTeam.club_id || "") !== String(teamForm.club_id || "") ||
+                editingTeam.status !== "active" ||
+                positions.some(position => String(
+                    (editingTeam.competition_team_players || []).find(item => item.position === position.key)?.player_id || ""
+                ) !== String(teamForm.players[position.key] || ""));
+
+            if (changed) {
+                const confirmed = window.confirm(
+                    `Update ${editingTeam.team_name || `Team ${editingTeam.team_number}`} after the draw has been confirmed?\n\n` +
+                    `Current players: ${existingNames.join(" / ") || "not available"}\n` +
+                    `New players: ${selectedNames.join(" / ")}\n\n` +
+                    `The team will keep its existing draw position and fixtures. Section, opponents, dates, venues and rink bookings will not be redrawn. ` +
+                    `If this is a replacement team, its status will be set to Active.`
+                );
+                if (!confirmed) return;
+            }
+        }
+
         setSaving(true);
 
         try {
@@ -1560,39 +1600,33 @@ function CompetitionWorkspace() {
                     teamResult.data.id;
 
             } else {
-                competitionTeamId =
-                    editingTeam.id;
+                competitionTeamId = editingTeam.id;
 
-                const teamResult =
-                    await supabase
-                        .from("competition_teams")
-                        .update({
-                            club_id:
-                                teamForm.club_id,
+                const teamResult = await supabase
+                    .from("competition_teams")
+                    .update({
+                        club_id: teamForm.club_id,
+                        team_name: teamForm.team_name.trim() || null,
+                        // Editing a withdrawn team is the supported way to
+                        // install a replacement into that same draw position.
+                        status: "active"
+                    })
+                    .eq("id", editingTeam.id);
 
-                            team_name:
-                                teamForm.team_name.trim() ||
-                                null
-                        })
-                        .eq(
-                            "id",
-                            editingTeam.id
-                        );
+                if (teamResult.error) throw teamResult.error;
 
-                if (teamResult.error) {
-                    throw teamResult.error;
-                }
-
-                const deleteResult =
-                    await supabase
-                        .from("competition_team_players")
-                        .delete()
-                        .eq(
-                            "competition_team_id",
-                            editingTeam.id
-                        );
+                const deleteResult = await supabase
+                    .from("competition_team_players")
+                    .delete()
+                    .eq("competition_team_id", editingTeam.id);
 
                 if (deleteResult.error) {
+                    // Restore the team's previous metadata if roster removal fails.
+                    await supabase.from("competition_teams").update({
+                        club_id: editingTeam.club_id,
+                        team_name: editingTeam.team_name || null,
+                        status: editingTeam.status || "active"
+                    }).eq("id", editingTeam.id);
                     throw deleteResult.error;
                 }
             }
@@ -1621,13 +1655,24 @@ function CompetitionWorkspace() {
 
             if (playersResult.error) {
                 if (!editingTeam) {
-                    await supabase
-                        .from("competition_teams")
-                        .delete()
-                        .eq(
-                            "id",
-                            competitionTeamId
-                        );
+                    await supabase.from("competition_teams").delete().eq("id", competitionTeamId);
+                } else {
+                    // Best-effort rollback so a failed roster save does not leave
+                    // the confirmed team with no players.
+                    const previousRows = (editingTeam.competition_team_players || []).map(item => ({
+                        competition_team_id: editingTeam.id,
+                        player_id: item.player_id,
+                        position: item.position,
+                        position_order: item.position_order
+                    }));
+                    if (previousRows.length) {
+                        await supabase.from("competition_team_players").insert(previousRows);
+                    }
+                    await supabase.from("competition_teams").update({
+                        club_id: editingTeam.club_id,
+                        team_name: editingTeam.team_name || null,
+                        status: editingTeam.status || "active"
+                    }).eq("id", editingTeam.id);
                 }
 
                 throw playersResult.error;
@@ -3641,14 +3686,17 @@ function CompetitionWorkspace() {
                         <form onSubmit={handleSaveTeam}>
 
                             <h6 className="text-primary mb-3">
-
                                 {editingTeam
-                                    ? `Edit Team ${editingTeam.team_number}`
+                                    ? (confirmedDraw ? `Edit / Replace Team ${editingTeam.team_number}` : `Edit Team ${editingTeam.team_number}`)
                                     : "Add Competition Team"
                                 }
-
                             </h6>
 
+                            {editingTeam && confirmedDraw && (
+                                <div className="alert alert-warning" role="note">
+                                    <strong>Draw already confirmed.</strong> You can replace one or more players, or replace this whole team by changing its club and players. The existing team number, section, opponents, dates, venues and rink bookings are retained. Saving a withdrawn team reactivates it in the same draw position. Review the change carefully before saving.
+                                </div>
+                            )}
 
                             <div className="row g-3 mb-4">
 
