@@ -24,7 +24,7 @@ function TournamentSetup({
     return (
 
         <AppCard
-            title="Tournament Setup"
+            title="Setup"
             icon="bi-sliders"
             collapsible
             collapsed={setupCollapsed}

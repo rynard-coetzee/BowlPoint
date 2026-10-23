@@ -1430,7 +1430,7 @@ function QuickTournament() {
 
                 <PageHeader
 
-                    title="Tournament Manager"
+                    title="Quick Score"
 
                     subtitle="Loading tournament..."
 
@@ -1487,7 +1487,7 @@ function QuickTournament() {
 
                 <PageHeader
 
-                    title="Tournament Manager"
+                    title="Quick Score"
 
                     subtitle="Unable to load tournament"
 
@@ -1543,7 +1543,7 @@ function QuickTournament() {
 
                 title={
                     tournament.name ||
-                    "Tournament Manager"
+                    "Quick Score"
                 }
 
                 subtitle={

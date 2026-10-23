@@ -23,7 +23,37 @@ function Dashboard() {
             if (competitionError) throw competitionError;
 
             const rows = competitionRows || [];
-            setCompetitions(rows);
+
+            // The dashboard should show the first scheduled playing date even
+            // when the competition-level start_date field has not been set.
+            // Keep start_date as a fallback for older/unscheduled competitions.
+            let displayRows = rows;
+            if (rows.length) {
+                const { data: scheduledDays, error: scheduledDaysError } = await supabase
+                    .from("competition_days")
+                    .select("competition_id, playing_date")
+                    .in("competition_id", rows.map(competition => competition.id))
+                    .not("playing_date", "is", null)
+                    .order("playing_date", { ascending: true });
+
+                if (scheduledDaysError) {
+                    console.warn("Unable to load scheduled competition dates:", scheduledDaysError);
+                } else {
+                    const firstDateByCompetition = new Map();
+                    (scheduledDays || []).forEach(day => {
+                        if (day.playing_date && !firstDateByCompetition.has(day.competition_id)) {
+                            firstDateByCompetition.set(day.competition_id, day.playing_date);
+                        }
+                    });
+
+                    displayRows = rows.map(competition => ({
+                        ...competition,
+                        dashboard_date: firstDateByCompetition.get(competition.id) || competition.start_date || null
+                    }));
+                }
+            }
+
+            setCompetitions(displayRows);
 
             const stats = {};
             const statsResults = await Promise.all(
@@ -59,7 +89,7 @@ function Dashboard() {
 
             setCompetitionStats(stats);
 
-            await loadTodayFixtures(rows);
+            await loadTodayFixtures(displayRows);
         } catch (error) {
             console.error("Unable to load dashboard:", error);
             setCompetitions([]);
@@ -311,9 +341,9 @@ function Dashboard() {
                                             {activeCompetition.name}
                                         </h2>
                                         <div className="text-muted">
-                                            {formatDate(activeCompetition.start_date)}
+                                            {formatDate(activeCompetition.dashboard_date || activeCompetition.start_date)}
                                             {activeCompetition.end_date &&
-                                                activeCompetition.end_date !== activeCompetition.start_date &&
+                                                activeCompetition.end_date !== (activeCompetition.dashboard_date || activeCompetition.start_date) &&
                                                 ` – ${formatDate(activeCompetition.end_date)}`}
                                         </div>
                                     </div>
@@ -618,7 +648,7 @@ function Dashboard() {
                                                         </td>
 
                                                         <td>
-                                                            {formatDate(competition.start_date)}
+                                                            {formatDate(competition.dashboard_date || competition.start_date)}
                                                         </td>
 
                                                         <td>

@@ -1,6 +1,7 @@
 import { createBrowserRouter } from "react-router-dom";
 
 import QuickScore from "./pages/QuickScore/QuickScore";
+import QuickDraw from "./pages/QuickDraw/QuickDraw";
 import QuickTournament from "./pages/QuickTournament/QuickTournament";
 import TournamentList from "./pages/QuickTournament/TournamentList";
 
@@ -93,6 +94,11 @@ const router = createBrowserRouter([
             {
                 path: "/quick-score",
                 element: <TournamentList />
+            },
+
+            {
+                path: "quick-draw",
+                element: <QuickDraw />
             },
 
             {

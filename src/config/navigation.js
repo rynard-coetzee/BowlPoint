@@ -13,6 +13,12 @@ const navigation = [
     },
 
     {
+        title: "Quick Draw",
+        path: "/quick-draw",
+        icon: "shuffle"
+    },
+
+    {
         title: "Competitions",
         path: "/competitions",
         icon: "trophy-fill"
