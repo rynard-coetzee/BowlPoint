@@ -24,4 +24,6 @@ dist-ssr
 *.sw?
 .env
 .env.local
-.env.*.local
+.env.*.localdist.zip
+dist/
+node_modules/

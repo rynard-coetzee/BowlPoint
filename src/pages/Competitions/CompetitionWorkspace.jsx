@@ -934,7 +934,12 @@ function CompetitionWorkspace() {
         const sectionMatches = (matchesOverride || confirmedDraw.matches || [])
             .filter(match => match.section_id === sectionId);
 
-        if (!sectionMatches.length || sectionMatches.some(match => !match.completed)) {
+        const sectionTeamIds = new Set((section.teams || []).map(team => team.id));
+        const expectedMatches = ((section.teams || []).length * ((section.teams || []).length - 1)) / 2;
+        if (!sectionMatches.length || sectionMatches.length !== expectedMatches || sectionMatches.some(match =>
+            !match.completed || !match.team_a_id || !match.team_b_id ||
+            !sectionTeamIds.has(match.team_a_id) || !sectionTeamIds.has(match.team_b_id)
+        )) {
             return null;
         }
 
@@ -989,6 +994,7 @@ function CompetitionWorkspace() {
             a.team.team_number - b.team.team_number
         );
 
+        if (!standings.length || standings.some(row => row.played !== section.teams.length - 1)) return null;
         return standings[0] || null;
     };
 
@@ -1049,6 +1055,57 @@ function CompetitionWorkspace() {
         );
     };
 
+    const isSectionComplete = (section) => {
+        const sectionTeams = section?.teams || [];
+        if (sectionTeams.length < 2) return false;
+        const teamIds = new Set(sectionTeams.map(team => team.id));
+        const sectionMatches = (confirmedDraw?.matches || []).filter(match => match.section_id === section.id);
+        const expectedMatches = (sectionTeams.length * (sectionTeams.length - 1)) / 2;
+        if (sectionMatches.length !== expectedMatches || sectionMatches.some(match =>
+            !match.completed || !match.team_a_id || !match.team_b_id ||
+            !teamIds.has(match.team_a_id) || !teamIds.has(match.team_b_id)
+        )) return false;
+        const standings = getSectionStandings(section.id);
+        return standings.length === sectionTeams.length &&
+            standings.every(row => row.played === sectionTeams.length - 1);
+    };
+
+    // Backfill knockout entrants from previously saved sectional results.
+    // Only fill empty slots; never overwrite a team already assigned to a playoff.
+    const playoffSyncInFlight = useRef(false);
+    useEffect(() => {
+        if (!confirmedDraw?.sections?.length || playoffSyncInFlight.current) return;
+        const quarterRound = confirmedDraw.rounds?.find(round => /quarter[ -]?final/i.test(round.round_name || ""));
+        if (!quarterRound) return;
+        const slotMap = { 1: [1, "team_a_id"], 3: [1, "team_b_id"], 2: [2, "team_a_id"], 4: [2, "team_b_id"], 5: [3, "team_a_id"], 7: [3, "team_b_id"], 6: [4, "team_a_id"], 8: [4, "team_b_id"] };
+        const updates = [];
+        for (const section of confirmedDraw.sections) {
+            const mapping = slotMap[section.section_number];
+            if (!mapping || !isSectionComplete(section)) continue;
+            const winner = getSectionWinner(section.id);
+            if (!winner) continue;
+            const [matchNumber, field] = mapping;
+            const target = confirmedDraw.matches.find(match => match.round_id === quarterRound.id && match.match_number === matchNumber);
+            if (target && !target[field]) updates.push({ id: target.id, field, teamId: winner.teamId });
+        }
+        if (!updates.length) return;
+        playoffSyncInFlight.current = true;
+        (async () => {
+            try {
+                for (const update of updates) {
+                    const { error } = await supabase.from("competition_matches")
+                        .update({ [update.field]: update.teamId }).eq("id", update.id).is(update.field, null);
+                    if (error) throw error;
+                }
+                await loadData();
+            } catch (error) {
+                console.error("Unable to backfill section winners into quarter-finals:", error);
+            } finally {
+                playoffSyncInFlight.current = false;
+            }
+        })();
+    }, [confirmedDraw]);
+
     const advanceWinner = async (matchId, winnerTeamId) => {
         const source = (confirmedDraw?.matches || []).find(match => match.id === matchId);
         if (!source?.next_match_id) return;
@@ -1085,7 +1142,9 @@ function CompetitionWorkspace() {
         const matchNumber = quarterFinalMap[sectionNumber];
         if (!matchNumber) return;
 
-        const quarterRound = confirmedDraw.rounds.find(round => round.round_number === 4);
+        const quarterRound = confirmedDraw.rounds.find(round =>
+            /quarter[ -]?final/i.test(round.round_name || "")
+        );
         if (!quarterRound) return;
 
         const quarter = (matchesAfterSave || confirmedDraw.matches || []).find(match =>
@@ -4969,10 +5028,10 @@ function CompetitionWorkspace() {
                                     return <TeamDisplay team={team} />;
                                 }
 
-                                const roundNumber = match.round?.round_number;
-                                const matchNumber = match.match_number;
+                                const roundName = (match.round?.round_name || "").toLowerCase();
+                                const matchNumber = Number(match.match_number) || 0;
 
-                                if (roundNumber === 4 && confirmedDraw.sections.length === 8) {
+                                if (roundName.includes("quarter") && confirmedDraw.sections.length === 8) {
                                     const pairs = [
                                         ["Section 1 Winner", "Section 3 Winner"],
                                         ["Section 2 Winner", "Section 4 Winner"],
@@ -4982,7 +5041,7 @@ function CompetitionWorkspace() {
                                     return pairs[matchNumber - 1]?.[side === "a" ? 0 : 1] || "Qualified team";
                                 }
 
-                                if (roundNumber === 5 && matchNumber <= 2) {
+                                if (roundName.includes("semi") && matchNumber <= 2) {
                                     const pairs = [
                                         ["Quarter Final 1 Winner", "Quarter Final 3 Winner"],
                                         ["Quarter Final 2 Winner", "Quarter Final 4 Winner"]
@@ -4990,7 +5049,7 @@ function CompetitionWorkspace() {
                                     return pairs[matchNumber - 1]?.[side === "a" ? 0 : 1] || "Quarter-final winner";
                                 }
 
-                                if (roundNumber === 6 && matchNumber === 1) {
+                                if (roundName.includes("final") && !roundName.includes("quarter") && !roundName.includes("semi") && matchNumber === 1) {
                                     return side === "a" ? "Semi Final 1 Winner" : "Semi Final 2 Winner";
                                 }
 
@@ -5105,10 +5164,9 @@ function CompetitionWorkspace() {
                                                             return (a.match_number || 0) - (b.match_number || 0);
                                                         });
 
-                                                    const sectionTeamCount = section.teams?.length || 0;
-                                                    const requiredGames = sectionTeamCount > 0 ? sectionTeamCount - 1 : 0;
+                                                    const sectionTeamCount = (section.teams || []).length;
                                                     const completedGames = sectionMatches.filter(match => match.completed).length;
-                                                    const complete = requiredGames > 0 && completedGames === sectionMatches.length && sectionMatches.length === (sectionTeamCount * (sectionTeamCount - 1)) / 2;
+                                                    const complete = isSectionComplete(section);
                                                     const winner = complete ? getSectionStandings(section.id)[0] : null;
                                                     const manuallyCollapsed = collapsedScoringSections[section.id];
                                                     const collapsed = manuallyCollapsed ?? complete;
@@ -5267,7 +5325,7 @@ function CompetitionWorkspace() {
                                             <div className="row g-3">
                                                 {confirmedDraw.sections.map(section => {
                                                     const standings = getSectionStandings(section.id);
-                                                    const complete = standings.length > 0 && standings.every(row => row.played === standings.length - 1);
+                                                    const complete = isSectionComplete(section);
                                                     const winner = complete ? standings[0] : null;
 
                                                     return (
