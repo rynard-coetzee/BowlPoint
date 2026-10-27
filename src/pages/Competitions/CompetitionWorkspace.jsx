@@ -1129,18 +1129,22 @@ function CompetitionWorkspace() {
         const sectionNumber = confirmedDraw?.sections?.find(section => section.id === sectionId)?.section_number;
         if (!sectionNumber) return;
 
-        const quarterFinalMap = {
-            1: 1,
-            3: 1,
-            2: 2,
-            4: 2,
-            5: 3,
-            7: 3,
-            6: 4,
-            8: 4
+        // Keep this mapping aligned with the backfill slotMap above:
+        // QF1: Section 1 vs 3; QF2: Section 2 vs 4;
+        // QF3: Section 5 vs 7; QF4: Section 6 vs 8.
+        // Sections 1, 2, 5 and 6 occupy Team A; 3, 4, 7 and 8 Team B.
+        const quarterFinalSlots = {
+            1: { matchNumber: 1, field: "team_a_id" },
+            3: { matchNumber: 1, field: "team_b_id" },
+            2: { matchNumber: 2, field: "team_a_id" },
+            4: { matchNumber: 2, field: "team_b_id" },
+            5: { matchNumber: 3, field: "team_a_id" },
+            7: { matchNumber: 3, field: "team_b_id" },
+            6: { matchNumber: 4, field: "team_a_id" },
+            8: { matchNumber: 4, field: "team_b_id" }
         };
-        const matchNumber = quarterFinalMap[sectionNumber];
-        if (!matchNumber) return;
+        const slot = quarterFinalSlots[sectionNumber];
+        if (!slot) return;
 
         const quarterRound = confirmedDraw.rounds.find(round =>
             /quarter[ -]?final/i.test(round.round_name || "")
@@ -1148,14 +1152,13 @@ function CompetitionWorkspace() {
         if (!quarterRound) return;
 
         const quarter = (matchesAfterSave || confirmedDraw.matches || []).find(match =>
-            match.round_id === quarterRound.id && match.match_number === matchNumber
+            match.round_id === quarterRound.id && match.match_number === slot.matchNumber
         );
         if (!quarter) return;
 
-        const field = [1, 3, 5, 7].includes(sectionNumber) ? "team_a_id" : "team_b_id";
         const { error } = await supabase
             .from("competition_matches")
-            .update({ [field]: winner.teamId })
+            .update({ [slot.field]: winner.teamId })
             .eq("id", quarter.id);
         if (error) throw error;
     };
