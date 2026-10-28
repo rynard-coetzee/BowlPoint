@@ -1070,14 +1070,36 @@ function CompetitionWorkspace() {
             standings.every(row => row.played === sectionTeams.length - 1);
     };
 
-    // Backfill knockout entrants from previously saved sectional results.
-    // Only fill empty slots; never overwrite a team already assigned to a playoff.
+    // Backfill completed section winners into the first applicable playoff round.
+    // Eight sections feed quarter-finals; four sections feed semi-finals;
+    // two sections feed the final. Only empty slots are filled automatically.
     const playoffSyncInFlight = useRef(false);
     useEffect(() => {
         if (!confirmedDraw?.sections?.length || playoffSyncInFlight.current) return;
-        const quarterRound = confirmedDraw.rounds?.find(round => /quarter[ -]?final/i.test(round.round_name || ""));
-        if (!quarterRound) return;
-        const slotMap = { 1: [1, "team_a_id"], 3: [1, "team_b_id"], 2: [2, "team_a_id"], 4: [2, "team_b_id"], 5: [3, "team_a_id"], 7: [3, "team_b_id"], 6: [4, "team_a_id"], 8: [4, "team_b_id"] };
+        const sectionCount = confirmedDraw.sections.length;
+        let targetRound = null;
+        let slotMap = {};
+
+        if (sectionCount === 8) {
+            targetRound = confirmedDraw.rounds?.find(round => /quarter[ -]?final/i.test(round.round_name || ""));
+            slotMap = {
+                1: [1, "team_a_id"], 3: [1, "team_b_id"],
+                2: [2, "team_a_id"], 4: [2, "team_b_id"],
+                5: [3, "team_a_id"], 7: [3, "team_b_id"],
+                6: [4, "team_a_id"], 8: [4, "team_b_id"]
+            };
+        } else if (sectionCount === 4) {
+            targetRound = confirmedDraw.rounds?.find(round => /semi[ -]?final/i.test(round.round_name || ""));
+            slotMap = {
+                1: [1, "team_a_id"], 3: [1, "team_b_id"],
+                2: [2, "team_a_id"], 4: [2, "team_b_id"]
+            };
+        } else if (sectionCount === 2) {
+            targetRound = confirmedDraw.rounds?.find(round => /^final$/i.test((round.round_name || "").trim()));
+            slotMap = { 1: [1, "team_a_id"], 2: [1, "team_b_id"] };
+        }
+
+        if (!targetRound) return;
         const updates = [];
         for (const section of confirmedDraw.sections) {
             const mapping = slotMap[section.section_number];
@@ -1085,7 +1107,9 @@ function CompetitionWorkspace() {
             const winner = getSectionWinner(section.id);
             if (!winner) continue;
             const [matchNumber, field] = mapping;
-            const target = confirmedDraw.matches.find(match => match.round_id === quarterRound.id && match.match_number === matchNumber);
+            const target = confirmedDraw.matches.find(match =>
+                match.round_id === targetRound.id && match.match_number === matchNumber
+            );
             if (target && !target[field]) updates.push({ id: target.id, field, teamId: winner.teamId });
         }
         if (!updates.length) return;
@@ -1094,12 +1118,14 @@ function CompetitionWorkspace() {
             try {
                 for (const update of updates) {
                     const { error } = await supabase.from("competition_matches")
-                        .update({ [update.field]: update.teamId }).eq("id", update.id).is(update.field, null);
+                        .update({ [update.field]: update.teamId })
+                        .eq("id", update.id)
+                        .is(update.field, null);
                     if (error) throw error;
                 }
                 await loadData();
             } catch (error) {
-                console.error("Unable to backfill section winners into quarter-finals:", error);
+                console.error("Unable to backfill section winners into playoffs:", error);
             } finally {
                 playoffSyncInFlight.current = false;
             }
@@ -1127,41 +1153,71 @@ function CompetitionWorkspace() {
         if (!winner) return;
 
         const sectionNumber = confirmedDraw?.sections?.find(section => section.id === sectionId)?.section_number;
+        const sectionCount = confirmedDraw?.sections?.length || 0;
         if (!sectionNumber) return;
 
-        // Keep this mapping aligned with the backfill slotMap above:
-        // QF1: Section 1 vs 3; QF2: Section 2 vs 4;
-        // QF3: Section 5 vs 7; QF4: Section 6 vs 8.
-        // Sections 1, 2, 5 and 6 occupy Team A; 3, 4, 7 and 8 Team B.
-        const quarterFinalSlots = {
-            1: { matchNumber: 1, field: "team_a_id" },
-            3: { matchNumber: 1, field: "team_b_id" },
-            2: { matchNumber: 2, field: "team_a_id" },
-            4: { matchNumber: 2, field: "team_b_id" },
-            5: { matchNumber: 3, field: "team_a_id" },
-            7: { matchNumber: 3, field: "team_b_id" },
-            6: { matchNumber: 4, field: "team_a_id" },
-            8: { matchNumber: 4, field: "team_b_id" }
-        };
-        const slot = quarterFinalSlots[sectionNumber];
-        if (!slot) return;
+        let targetRoundPattern = null;
+        let slotMap = {};
+        if (sectionCount === 8) {
+            targetRoundPattern = /quarter[ -]?final/i;
+            slotMap = {
+                1: { matchNumber: 1, field: "team_a_id" },
+                3: { matchNumber: 1, field: "team_b_id" },
+                2: { matchNumber: 2, field: "team_a_id" },
+                4: { matchNumber: 2, field: "team_b_id" },
+                5: { matchNumber: 3, field: "team_a_id" },
+                7: { matchNumber: 3, field: "team_b_id" },
+                6: { matchNumber: 4, field: "team_a_id" },
+                8: { matchNumber: 4, field: "team_b_id" }
+            };
+        } else if (sectionCount === 4) {
+            targetRoundPattern = /semi[ -]?final/i;
+            slotMap = {
+                1: { matchNumber: 1, field: "team_a_id" },
+                3: { matchNumber: 1, field: "team_b_id" },
+                2: { matchNumber: 2, field: "team_a_id" },
+                4: { matchNumber: 2, field: "team_b_id" }
+            };
+        } else if (sectionCount === 2) {
+            targetRoundPattern = /^final$/i;
+            slotMap = {
+                1: { matchNumber: 1, field: "team_a_id" },
+                2: { matchNumber: 1, field: "team_b_id" }
+            };
+        }
 
-        const quarterRound = confirmedDraw.rounds.find(round =>
-            /quarter[ -]?final/i.test(round.round_name || "")
+        const slot = slotMap[sectionNumber];
+        if (!slot || !targetRoundPattern) return;
+        const targetRound = confirmedDraw.rounds.find(round =>
+            targetRoundPattern.test((round.round_name || "").trim())
         );
-        if (!quarterRound) return;
+        if (!targetRound) return;
 
-        const quarter = (matchesAfterSave || confirmedDraw.matches || []).find(match =>
-            match.round_id === quarterRound.id && match.match_number === slot.matchNumber
+        const targetMatch = (matchesAfterSave || confirmedDraw.matches || []).find(match =>
+            match.round_id === targetRound.id && match.match_number === slot.matchNumber
         );
-        if (!quarter) return;
+        if (!targetMatch) return;
+
+        // Do not overwrite an already populated slot; this avoids replacing a
+        // manually corrected or previously advanced team.
+        const existingTeamId = targetMatch[slot.field];
+        if (existingTeamId && existingTeamId !== winner.teamId) {
+            console.warn("Playoff slot already contains a different team; leaving it unchanged.", {
+                sectionNumber, matchNumber: slot.matchNumber, field: slot.field,
+                existingTeamId, winnerTeamId: winner.teamId
+            });
+            return;
+        }
+        if (existingTeamId === winner.teamId) return;
 
         const { error } = await supabase
             .from("competition_matches")
             .update({ [slot.field]: winner.teamId })
-            .eq("id", quarter.id);
+            .eq("id", targetMatch.id)
+            .is(slot.field, null);
         if (error) throw error;
     };
+
 
     const handleSaveResult = async (event) => {
         event.preventDefault();
@@ -5045,6 +5101,13 @@ function CompetitionWorkspace() {
                                 }
 
                                 if (roundName.includes("semi") && matchNumber <= 2) {
+                                    if (confirmedDraw.sections.length === 4) {
+                                        const pairs = [
+                                            ["Section 1 Winner", "Section 3 Winner"],
+                                            ["Section 2 Winner", "Section 4 Winner"]
+                                        ];
+                                        return pairs[matchNumber - 1]?.[side === "a" ? 0 : 1] || "Section winner";
+                                    }
                                     const pairs = [
                                         ["Quarter Final 1 Winner", "Quarter Final 3 Winner"],
                                         ["Quarter Final 2 Winner", "Quarter Final 4 Winner"]
