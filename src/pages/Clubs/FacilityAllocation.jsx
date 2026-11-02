@@ -35,6 +35,7 @@ export default function FacilityAllocation() {
   const [allocations, setAllocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [allocating, setAllocating] = useState(false);
+  const [allocationAttempted, setAllocationAttempted] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -320,6 +321,7 @@ export default function FacilityAllocation() {
   };
 
   const runAutoAllocation = async () => {
+    setAllocationAttempted(true);
     setAllocating(true); setError(""); setNotice("");
     try {
       const rows = buildInitialRows().sort((a, b) => `${a.playing_date}:${a.starts_at}:${a.round_number}:${a.match_number}`.localeCompare(`${b.playing_date}:${b.starts_at}:${b.round_number}:${b.match_number}`));
@@ -458,7 +460,7 @@ export default function FacilityAllocation() {
     </div>
     {error && <div className="alert alert-danger" role="alert">{error}</div>}
     {notice && <div className="alert alert-info" role="status">{notice}</div>}
-    {!loading && ignoredStaleMatchCount > 0 && <div className="alert alert-warning" role="alert">
+    {!loading && allocationAttempted && ignoredStaleMatchCount > 0 && <div className="alert alert-warning" role="alert">
       {ignoredStaleMatchCount} fixture(s) were ignored because one or both assigned teams are missing or are no longer active in this competition. They will not be included in rink allocation.
     </div>}
     {loading ? <div className="text-muted">Loading competition fixtures and facilities…</div> : <>

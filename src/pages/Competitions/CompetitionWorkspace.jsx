@@ -547,6 +547,24 @@ function CompetitionWorkspace() {
         confirmedDraw.rounds.every(round => round.competition_day_id)
     );
 
+    // Rink allocation must only open when the current date assignments have
+    // actually been persisted. This also catches edits made after a previous save.
+    const scheduleSaved = Boolean(
+        scheduleAssigned &&
+        scheduleProposal?.days?.length &&
+        scheduleAssignments.length === scheduleProposal.days.length &&
+        scheduleAssignments.every(assignment => {
+            const savedDay = playingDays.find(day => day.day_number === assignment.dayNumber);
+            return Boolean(
+                savedDay?.id &&
+                assignment.existing_id === savedDay.id &&
+                assignment.playing_date &&
+                assignment.playing_date === savedDay.playing_date &&
+                (assignment.name?.trim() || assignment.label) === (savedDay.name?.trim() || assignment.label)
+            );
+        })
+    );
+
     // A round is sectional when its fixtures belong to a section.
     // Do not infer this from the round number: a single 5-team round robin
     // legitimately has 5 sectional rounds, so rounds 4 and 5 are still
@@ -3113,6 +3131,72 @@ function CompetitionWorkspace() {
     };
 
     /*
+     * Final competition podium. Gold/Silver come from the completed final.
+     * Bronze is shared by the two losing semi-finalists; no third-place match
+     * is used to determine bronze.
+     */
+    const competitionPodium = (() => {
+        if (competition?.status !== "completed" || !confirmedDraw?.matches?.length) return null;
+
+        const matches = confirmedDraw.matches;
+        const completedResult = match =>
+            match?.completed === true &&
+            match.team_a_id && match.team_b_id &&
+            match.score_a !== null && match.score_a !== undefined && match.score_a !== "" &&
+            match.score_b !== null && match.score_b !== undefined && match.score_b !== "" &&
+            Number.isFinite(Number(match.score_a)) &&
+            Number.isFinite(Number(match.score_b)) &&
+            Number(match.score_a) !== Number(match.score_b);
+
+        const roundName = match =>
+            String(match?.round?.round_name || "").trim().toLowerCase();
+
+        const finalMatches = matches.filter(match => {
+            const name = roundName(match);
+            return /final/.test(name) && !/semi|quarter|third.?place/.test(name);
+        });
+        const semiFinalMatches = matches.filter(match => /semi[\s-]*final/.test(roundName(match)));
+
+        if (finalMatches.length !== 1 || !completedResult(finalMatches[0])) return null;
+
+        const finalMatch = finalMatches[0];
+        const finalWinnerId = Number(finalMatch.score_a) > Number(finalMatch.score_b)
+            ? finalMatch.team_a_id : finalMatch.team_b_id;
+        const finalRunnerUpId = finalWinnerId === finalMatch.team_a_id
+            ? finalMatch.team_b_id : finalMatch.team_a_id;
+
+        const bronzeTeamIds = semiFinalMatches
+            .filter(completedResult)
+            .map(match => Number(match.score_a) < Number(match.score_b)
+                ? match.team_a_id : match.team_b_id)
+            .filter(teamId => teamId !== finalWinnerId && teamId !== finalRunnerUpId);
+
+        const uniqueBronzeIds = [...new Set(bronzeTeamIds)];
+        if (uniqueBronzeIds.length !== 2) return null;
+
+        const teamById = new Map(teams.map(team => [team.id, team]));
+        const toPodiumTeam = teamId => {
+            const team = teamById.get(teamId);
+            if (!team) return null;
+            const teamName = team.team_name?.trim() ||
+                `${team.clubs?.short_name || team.clubs?.name || "Team"} ${team.team_number || ""}`.trim();
+            return {
+                id: team.id,
+                name: teamName,
+                clubName: team.clubs?.name || team.clubs?.short_name || "",
+                playerNames: getTeamPlayerNames(team)
+            };
+        };
+
+        const gold = toPodiumTeam(finalWinnerId);
+        const silver = toPodiumTeam(finalRunnerUpId);
+        const bronze = uniqueBronzeIds.map(toPodiumTeam).filter(Boolean);
+        if (!gold || !silver || bronze.length !== 2) return null;
+
+        return { gold, silver, bronze };
+    })();
+
+    /*
      * Loading.
      */
     if (loading) {
@@ -3264,6 +3348,44 @@ function CompetitionWorkspace() {
 
             </div>
 
+
+            {competitionPodium && (
+                <div className="card shadow-sm border-0 mb-4">
+                    <div className="card-header bg-white">
+                        <div className="fw-semibold">Competition Results</div>
+                        <div className="small text-muted">Final standings — Gold, Silver and shared Bronze</div>
+                    </div>
+                    <div className="card-body">
+                        <div className="row g-3 align-items-stretch">
+                            {[
+                                { medal: "Gold", icon: "bi-award-fill", tone: "text-warning", team: competitionPodium.gold },
+                                { medal: "Silver", icon: "bi-award-fill", tone: "text-secondary", team: competitionPodium.silver },
+                                ...competitionPodium.bronze.map((team, index) => ({
+                                    medal: "Bronze",
+                                    icon: "bi-award-fill",
+                                    tone: "text-danger",
+                                    team,
+                                    key: `bronze-${index}`
+                                }))
+                            ].map((place, index) => (
+                                <div className="col-12 col-sm-6 col-xl-3" key={place.key || place.medal}>
+                                    <div className="border rounded p-3 h-100 d-flex align-items-center gap-3">
+                                        <i className={`bi ${place.icon} ${place.tone}`} style={{ fontSize: "2rem" }}></i>
+                                        <div className="min-w-0">
+                                            <div className="small text-muted fw-semibold">{place.medal}</div>
+                                            <div className="fw-bold text-break">{place.team.name}</div>
+                                            {place.team.clubName && <div className="small text-muted">{place.team.clubName}</div>}
+                                            {place.team.playerNames.length > 0 && (
+                                                <div className="small mt-1">{place.team.playerNames.join(", ")}</div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Progressive workspace navigation */}
             <div className="card shadow-sm border-0 mb-4 workspace-progress" id="workspace-progress">
@@ -4959,7 +5081,13 @@ function CompetitionWorkspace() {
                         </div>
 
                         <div className="d-flex flex-wrap justify-content-between gap-2 mt-4">
-                            <button type="button" className="btn btn-outline-primary" onClick={() => navigate(`/facilities/allocation/${competitionId}`)}>
+                            <button
+                                type="button"
+                                className="btn btn-outline-primary"
+                                onClick={() => navigate(`/facilities/allocation/${competitionId}`)}
+                                disabled={!scheduleSaved || savingSchedule}
+                                title={scheduleSaved ? "Open rink allocation" : "Save the schedule before allocating club greens and rinks"}
+                            >
                                 <i className="bi bi-grid-3x3-gap me-2"></i>Allocate Club Greens & Rinks
                             </button>
                             <button
@@ -4981,6 +5109,11 @@ function CompetitionWorkspace() {
                                 )}
                             </button>
                         </div>
+                        {!scheduleSaved && (
+                            <div className="small text-muted mt-2">
+                                Save the schedule first. Club greens and rinks can be allocated once all playing dates have been saved.
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
@@ -5003,7 +5136,8 @@ function CompetitionWorkspace() {
                                 type="button"
                                 className="btn btn-outline-success btn-sm"
                                 onClick={() => navigate(`/facilities/allocation/${competitionId}`)}
-                                title="Open rink allocation for this competition"
+                                disabled={!scheduleSaved}
+                                title={scheduleSaved ? "Open rink allocation for this competition" : "Save the playing schedule before opening rink allocation"}
                             >
                                 <i className="bi bi-grid-3x3-gap me-2"></i>
                                 Rink Allocations

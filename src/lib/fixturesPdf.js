@@ -60,7 +60,11 @@ function getTeamMembers(team) {
                 ? String(member.position).replace(/_/g, " ").replace(/\b\w/g, char => char.toUpperCase())
                 : "";
 
-            return position ? `${name} - ${position}` : name;
+            // Singles rosters use the generic "Player" position. It adds no
+            // useful information to the printed draw, so show only the player's name.
+            return position && position.toLowerCase() !== "player"
+                ? `${name} - ${position}`
+                : name;
         })
         .filter(Boolean);
 }
