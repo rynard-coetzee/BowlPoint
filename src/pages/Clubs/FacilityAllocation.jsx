@@ -23,6 +23,7 @@ export default function FacilityAllocation() {
   const [competitionTeams, setCompetitionTeams] = useState([]);
   const [sections, setSections] = useState([]);
   const [sectionVenueIds, setSectionVenueIds] = useState({});
+  const [sectionGreenIds, setSectionGreenIds] = useState({});
   const [proposedSectionVenueIds, setProposedSectionVenueIds] = useState({});
   const [venueProposalReady, setVenueProposalReady] = useState(false);
   const [savingVenues, setSavingVenues] = useState(false);
@@ -52,7 +53,7 @@ export default function FacilityAllocation() {
         supabase.from("facility_bookings").select("id,competition_id,match_id,green_id,rink_id,playing_date,session_name,starts_at,ends_at,direction,status").neq("status", "cancelled"),
         supabase.from("clubs").select("id,name,short_name").order("name"),
         supabase.from("competition_sections").select("id,competition_id,section_number,section_name").eq("competition_id", competitionId).order("section_number"),
-        supabase.from("competition_section_venues").select("section_id,club_id").eq("competition_id", competitionId)
+        supabase.from("competition_section_venues").select("section_id,club_id,green_id").eq("competition_id", competitionId)
       ]);
       for (const result of [roundsRes, matchesRes, teamsRes, greensRes, bookingsRes, clubsRes, sectionsRes, sectionVenuesRes]) if (result.error) throw result.error;
       setCompetition(competitionRes.data || { id: competitionId, name: "Competition" });
@@ -60,6 +61,7 @@ export default function FacilityAllocation() {
       setCompetitionTeams(loadedTeams);
       setSections(sectionsRes.data || []);
       setSectionVenueIds(Object.fromEntries((sectionVenuesRes.data || []).map(row => [row.section_id, row.club_id])));
+      setSectionGreenIds(Object.fromEntries((sectionVenuesRes.data || []).filter(row => row.green_id).map(row => [row.section_id, row.green_id])));
       const teamMap = new Map(loadedTeams.map(t => [t.id, t]));
       const roundRows = (roundsRes.data || []).map(r => ({ ...r, day: r.competition_days }));
       const roundMap = new Map(roundRows.map(r => [r.id, r]));
@@ -134,13 +136,196 @@ export default function FacilityAllocation() {
   const allocationByMatch = useMemo(() => new Map(allocations.map(a => [a.match_id, a])), [allocations]);
   const eligibleClubs = useMemo(() => clubs.filter(c => greens.some(g => g.club_id === c.id)), [clubs, greens]);
   const selectedGreens = useMemo(() => greens.filter(g => selectedClubIds.includes(g.club_id)), [greens, selectedClubIds]);
+  const isSectionalFixture = row => Boolean(
+    row.section_id &&
+    sections.some(section => section.id === row.section_id) &&
+    !/playoff|quarter.?final|semi.?final|grand.?final|final/i.test(row.round_name || "")
+  );
+
+  // Pin each section to ONE green for the entire sectional stage.
+  // Green assignment is based on simultaneous match demand, not section count:
+  // if all sections fit on one green (normally six rinks), keep them together
+  // on that green. Only use additional greens when a session exceeds capacity.
+  const buildSectionGreenMap = (venueIds, savedGreenIds = sectionGreenIds) => {
+    const map = {};
+    const sectionsByClub = new Map();
+
+    for (const section of [...sections].sort((a, b) =>
+      (a.section_number || 0) - (b.section_number || 0)
+    )) {
+      const clubId = venueIds[section.id];
+      if (!clubId) continue;
+      if (!sectionsByClub.has(clubId)) sectionsByClub.set(clubId, []);
+      sectionsByClub.get(clubId).push(section);
+    }
+
+    // Reproduce the allocator's scheduled session grouping. Each round on a
+    // playing date occupies its scheduled session; count the section's games
+    // within that session to establish its simultaneous rink demand.
+    const roundDayOrder = new Map();
+    const dayRoundGroups = new Map();
+    rounds.forEach(round => {
+      if (!round.day?.playing_date) return;
+      const dateKey = String(round.day.playing_date);
+      if (!dayRoundGroups.has(dateKey)) dayRoundGroups.set(dateKey, []);
+      dayRoundGroups.get(dateKey).push(round);
+    });
+    for (const group of dayRoundGroups.values()) {
+      group.sort((a, b) => (a.round_number || 0) - (b.round_number || 0))
+        .forEach((round, index) => {
+          roundDayOrder.set(round.id, Math.min(index, SESSIONS.length - 1));
+        });
+    }
+
+    const demandBySection = new Map();
+    for (const section of sections) demandBySection.set(section.id, new Map());
+
+    for (const match of matches) {
+      if (!match.section_id || !demandBySection.has(match.section_id)) continue;
+      const round = match.round || rounds.find(item => item.id === match.round_id);
+      if (!round?.day?.playing_date) continue;
+      const sessionIndex = roundDayOrder.get(round.id) ?? 0;
+      const fallback = SESSIONS[sessionIndex];
+      const existingBooking = bookings.find(booking =>
+        booking.match_id === match.id &&
+        booking.competition_id === competitionId &&
+        booking.status !== "cancelled"
+      );
+      const date = existingBooking?.playing_date || round.day.playing_date;
+      const startsAt = existingBooking?.starts_at || localIso(date, fallback.start);
+      const endsAt = existingBooking?.ends_at || localIso(date, fallback.end);
+      const slotKey = `${date}|${startsAt}|${endsAt}`;
+      const sectionDemand = demandBySection.get(match.section_id);
+      sectionDemand.set(slotKey, (sectionDemand.get(slotKey) || 0) + 1);
+    }
+
+    for (const [clubId, clubSections] of sectionsByClub) {
+      const clubGreens = greens
+        .filter(green => green.club_id === clubId && green.active && green.rinks.length)
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, {
+          numeric: true,
+          sensitivity: "base"
+        }));
+
+      if (!clubGreens.length) {
+        throw new Error(`${clubs.find(club => club.id === clubId)?.name || "The selected club"} has no active greens with active rinks.`);
+      }
+
+      const sectionLoads = clubSections.map(section => {
+        const slots = demandBySection.get(section.id) || new Map();
+        return {
+          section,
+          slots,
+          total: [...slots.values()].reduce((sum, count) => sum + count, 0),
+          peak: Math.max(0, ...slots.values())
+        };
+      }).sort((a, b) =>
+        b.peak - a.peak ||
+        b.total - a.total ||
+        (a.section.section_number || 0) - (b.section.section_number || 0)
+      );
+
+      const fitsOnGreen = (loads, green) => loads.every(load =>
+        [...load.slots.entries()].every(([slot, count]) => {
+          const alreadyAssigned = loads
+            .filter(other => map[other.section.id] === green.id)
+            .reduce((sum, other) => sum + (other.slots.get(slot) || 0), 0);
+          return alreadyAssigned + count <= green.rinks.length;
+        })
+      );
+
+      // First test whether ALL sections can stay on one green. Prefer an
+      // already-saved green if it can hold the complete simultaneous demand.
+      const savedGreenIdsForClub = [...new Set(clubSections
+        .map(section => savedGreenIds?.[section.id])
+        .filter(Boolean))];
+      const oneGreenCandidates = [
+        ...clubGreens.filter(green => savedGreenIdsForClub.includes(green.id)),
+        ...clubGreens.filter(green => !savedGreenIdsForClub.includes(green.id))
+      ];
+      const oneGreen = oneGreenCandidates.find(green =>
+        sectionLoads.every(load =>
+          [...load.slots.values()].every(count => count <= green.rinks.length)
+        ) &&
+        [...new Set(sectionLoads.flatMap(load => [...load.slots.keys()]))].every(slot =>
+          sectionLoads.reduce((sum, load) => sum + (load.slots.get(slot) || 0), 0) <= green.rinks.length
+        )
+      );
+
+      if (oneGreen) {
+        clubSections.forEach(section => { map[section.id] = oneGreen.id; });
+        continue;
+      }
+
+      // More than one green is required. Keep every section intact and place
+      // the largest simultaneous demands first, choosing a green only when
+      // every affected session remains within that green's rink capacity.
+      const loadsByGreen = new Map(clubGreens.map(green => [green.id, new Map()]));
+      for (const load of sectionLoads) {
+        const savedId = savedGreenIds?.[load.section.id];
+        const candidates = [
+          ...clubGreens.filter(green => green.id === savedId),
+          ...clubGreens.filter(green => green.id !== savedId)
+        ];
+
+        const feasible = candidates.filter(green => {
+          const current = loadsByGreen.get(green.id);
+          return [...load.slots.entries()].every(([slot, count]) =>
+            (current.get(slot) || 0) + count <= green.rinks.length
+          );
+        });
+
+        if (!feasible.length) {
+          const clubName = clubs.find(club => club.id === clubId)?.name || "The selected club";
+          throw new Error(
+            `${clubName} does not have enough green capacity to keep every section together. ` +
+            `At least one session needs more simultaneous rinks than the available greens can provide. ` +
+            `Select another host club or schedule some rounds in another session.`
+          );
+        }
+
+        // Prefer the feasible green with the lowest projected peak utilisation;
+        // saved green is the tie-breaker to avoid unnecessary movement on reruns.
+        feasible.sort((a, b) => {
+          const score = green => {
+            const current = loadsByGreen.get(green.id);
+            let peak = 0;
+            for (const [slot, count] of load.slots) {
+              peak = Math.max(peak, ((current.get(slot) || 0) + count) / green.rinks.length);
+            }
+            return peak;
+          };
+          const scoreDiff = score(a) - score(b);
+          if (Math.abs(scoreDiff) > 0.0001) return scoreDiff;
+          if (a.id === savedId) return -1;
+          if (b.id === savedId) return 1;
+          return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+        });
+
+        const chosen = feasible[0];
+        map[load.section.id] = chosen.id;
+        const current = loadsByGreen.get(chosen.id);
+        for (const [slot, count] of load.slots) {
+          current.set(slot, (current.get(slot) || 0) + count);
+        }
+      }
+    }
+
+    return map;
+  };
+
+  const sectionGreenById = useMemo(() => {
+    try { return buildSectionGreenMap(sectionVenueIds, sectionGreenIds); }
+    catch { return {}; }
+  }, [sections, sectionVenueIds, sectionGreenIds, greens, clubs]);
   const toggleClub = (clubId, checked) => setSelectedClubIds(current => checked ? [...new Set([...current, clubId])] : current.filter(id => id !== clubId));
 
-  const saveSectionVenues = async (next = sectionVenueIds) => {
+  const saveSectionVenues = async (next = sectionVenueIds, greenMap = sectionGreenIds) => {
     const payload = sections.filter(section => next[section.id]).map(section => ({
       competition_id: competitionId,
       section_id: section.id,
       club_id: next[section.id],
+      green_id: greenMap[section.id] || null,
     }));
     if (payload.length) {
       const { error: upsertError } = await supabase
@@ -229,28 +414,29 @@ export default function FacilityAllocation() {
   };
 
   const validateSectionHostCapacity = (proposal) => {
-    const rows = buildInitialRows().filter(row => row.section_id && !/playoff|quarter.?final|semi.?final|grand.?final|final/i.test(row.round_name || ""));
+    const rows = buildInitialRows().filter(isSectionalFixture);
+    const sectionGreenMap = buildSectionGreenMap(proposal, proposal === sectionVenueIds ? sectionGreenIds : {});
     const slotLoads = new Map();
     for (const row of rows) {
-      const slot = `${row.playing_date}|${row.starts_at}|${row.ends_at}|${Number(row.direction)}`;
-      const key = `${proposal[row.section_id]}|${slot}`;
+      const greenId = sectionGreenMap[row.section_id];
+      const key = `${greenId}|${row.playing_date}|${row.starts_at}|${row.ends_at}|${Number(row.direction)}`;
       slotLoads.set(key, (slotLoads.get(key) || 0) + 1);
     }
     for (const [key, demand] of slotLoads) {
-      const [clubId, date, start, end, direction] = key.split("|");
-      const usableGreens = greens.filter(g => g.club_id === clubId && g.active && g.rinks.length && (Number(direction) !== 2 || g.allows_direction_change));
-      let capacity = 0;
-      for (const green of usableGreens) {
-        for (const rink of green.rinks) {
-          const occupied = bookings.some(b => b.competition_id !== competitionId && b.status !== "cancelled" &&
-            b.green_id === green.id && overlaps(start, end, b.starts_at, b.ends_at) &&
-            (Number(b.direction) !== Number(direction) || b.rink_id === rink.id));
-          if (!occupied) capacity += 1;
-        }
-      }
-      if (demand > capacity) {
-        const club = clubs.find(c => c.id === clubId)?.name || "Selected club";
-        throw new Error(`${club} cannot accommodate ${demand} simultaneous fixture(s) on ${date} at ${start}. Only ${capacity} compatible rinks are available. Change the host club or review the facility calendar.`);
+      const [greenId, date, start, end, direction] = key.split("|");
+      const green = greens.find(item => item.id === greenId);
+      const usableRinks = green && (Number(direction) !== 2 || green.allows_direction_change)
+        ? green.rinks.filter(rink => !bookings.some(b =>
+            b.competition_id !== competitionId &&
+            b.status !== "cancelled" &&
+            b.green_id === green.id &&
+            overlaps(start, end, b.starts_at, b.ends_at) &&
+            (Number(b.direction) !== Number(direction) || b.rink_id === rink.id)
+          ))
+        : [];
+      if (demand > usableRinks.length) {
+        const club = clubs.find(c => c.id === green?.club_id)?.name || "Selected club";
+        throw new Error(`${club} — ${green?.name || "assigned green"} cannot accommodate ${demand} simultaneous fixture(s) for its assigned sections on ${date} at ${start}. Only ${usableRinks.length} compatible rinks are available on this green. Sections cannot move between greens during the competition; choose another host-club arrangement or review the facility calendar.`);
       }
     }
   };
@@ -267,12 +453,14 @@ export default function FacilityAllocation() {
           throw new Error(`The proposed host for ${section.section_name || `Section ${section.section_number}`} is not in the eligible club list.`);
         }
       }
+      const proposedGreenMap = buildSectionGreenMap(proposedSectionVenueIds, {});
       validateSectionHostCapacity(proposedSectionVenueIds);
-      await saveSectionVenues(proposedSectionVenueIds);
+      await saveSectionVenues(proposedSectionVenueIds, proposedGreenMap);
       setSectionVenueIds({ ...proposedSectionVenueIds });
+      setSectionGreenIds(proposedGreenMap);
       setVenueProposalReady(false);
       setAllocations([]);
-      setNotice("Section host clubs saved. Every section now has one fixed venue for the entire sectional stage. You can now allocate individual greens and rinks.");
+      setNotice("Section host clubs saved. Every section now has one fixed host club and a balanced, permanent green assignment for the entire sectional stage. You can now allocate rinks within those greens.");
     } catch (e) { setError(`Unable to save section host clubs: ${e.message}`); }
     finally { setSavingVenues(false); }
   };
@@ -327,9 +515,14 @@ export default function FacilityAllocation() {
       const rows = buildInitialRows().sort((a, b) => `${a.playing_date}:${a.starts_at}:${a.round_number}:${a.match_number}`.localeCompare(`${b.playing_date}:${b.starts_at}:${b.round_number}:${b.match_number}`));
       if (!rows.length) throw new Error("No fixtures have both teams and a saved playing date. Confirm the draw and save the playing dates first.");
       if (!selectedClubIds.length) throw new Error("Select the clubs that are permitted to host this competition before allocating rinks.");
-      const isSectionalRow = row => Boolean(row.section_id && sections.some(section => section.id === row.section_id) && !/playoff|quarter.?final|semi.?final|grand.?final|final/i.test(row.round_name || ""));
+      const isSectionalRow = isSectionalFixture;
+      const sectionGreenMap = buildSectionGreenMap(sectionVenueIds, sectionGreenIds);
+      if (Object.keys(sectionGreenMap).some(sectionId => sectionGreenIds[sectionId] !== sectionGreenMap[sectionId])) {
+        await saveSectionVenues(sectionVenueIds, sectionGreenMap);
+        setSectionGreenIds(sectionGreenMap);
+      }
       const externalBookings = bookings.filter(b => b.status !== "cancelled" && b.competition_id !== competitionId);
-      const teamRinks = new Map();
+      const teamRinkHistory = new Map();
       const planned = [];
       for (const row of rows) {
         const afternoon = Number(row.direction) === 2 || row.session_name.startsWith("Afternoon");
@@ -345,8 +538,12 @@ export default function FacilityAllocation() {
         if (!fixedVenueClub) {
           throw new Error(`No existing venue could be resolved for Round ${row.round_number}, ${row.team_a_label} vs ${row.team_b_label}. Assign its venue first; rink-only allocation will not choose a new venue.`);
         }
+        const pinnedGreenId = isSectionalRow(row) ? sectionGreenMap[row.section_id] : null;
         const candidates = selectedGreens.filter(g =>
-          g.active && g.club_id === fixedVenueClub && (!afternoon || g.allows_direction_change)
+          g.active &&
+          g.club_id === fixedVenueClub &&
+          (!pinnedGreenId || g.id === pinnedGreenId) &&
+          (!afternoon || g.allows_direction_change)
         ).flatMap(g => g.rinks.map(r => ({ green: g, rink: r })));
         if (!candidates.length) {
           const venueName = clubs.find(c => c.id === fixedVenueClub)?.name || "the saved venue";
@@ -359,17 +556,32 @@ export default function FacilityAllocation() {
             // sessions conflict only when the same physical rink is already booked.
             return Number(b.direction) !== desiredDirection || b.rink_id === c.rink.id;
           }) || planned.some(b => b.green_id === c.green.id && overlaps(row.starts_at, row.ends_at, b.starts_at, b.ends_at) && (Number(b.direction) !== desiredDirection || b.rink_id === c.rink.id));
-          const repeated = [row.team_a_id, row.team_b_id].filter(Boolean).some(id => teamRinks.get(id)?.has(c.rink.id));
+          const relevantHistory = [row.team_a_id, row.team_b_id]
+            .filter(Boolean)
+            .flatMap(id => (teamRinkHistory.get(id) || []).filter(previous => previous.rink_id === c.rink.id));
+          const repeated = relevantHistory.length > 0;
+          const sameDirectionRepeat = relevantHistory.some(previous => Number(previous.direction) === desiredDirection);
+          const currentPartOfDay = /afternoon/i.test(row.session_name || "") ? "afternoon" : "morning";
+          const samePartOfDayRepeat = relevantHistory.some(previous =>
+            Number(previous.direction) === desiredDirection && previous.part_of_day === currentPartOfDay
+          );
+          const repeatPenalty = !repeated ? 0
+            : !sameDirectionRepeat ? 20
+            : samePartOfDayRepeat ? 100 : 50;
           const sameVenueRinkLoad = planned.filter(b => b.green_id === c.green.id && b.rink_id === c.rink.id).length;
-          return { ...c, conflict, repeated, score: (conflict ? 100000 : 0) + (repeated ? 100 : 0) + sameVenueRinkLoad };
+          return { ...c, conflict, repeated, score: (conflict ? 100000 : 0) + repeatPenalty * 100 + sameVenueRinkLoad };
         }).filter(c => !c.conflict).sort((a, b) => a.score - b.score || a.green.name.localeCompare(b.green.name) || a.rink.label.localeCompare(b.rink.label, undefined, { numeric: true }));
         if (!ranked.length) throw new Error(`No available rink at the saved venue for Round ${row.round_number}, ${row.team_a_label} vs ${row.team_b_label} on ${row.playing_date}. Check the shared calendar or adjust the facility configuration. Existing venues and times have not been changed.`);
         const chosen = ranked[0];
         const allocation = { ...row, venue_club_id: chosen.green.club_id, venue_name: chosen.green.clubs?.name || row.venue_name || "Club", green_id: chosen.green.id, rink_id: chosen.rink.id, direction: desiredDirection, repeat_warning: chosen.repeated };
         planned.push(allocation);
         for (const teamId of [row.team_a_id, row.team_b_id].filter(Boolean)) {
-          if (!teamRinks.has(teamId)) teamRinks.set(teamId, new Set());
-          teamRinks.get(teamId).add(chosen.rink.id);
+          if (!teamRinkHistory.has(teamId)) teamRinkHistory.set(teamId, []);
+          teamRinkHistory.get(teamId).push({
+            rink_id: chosen.rink.id,
+            direction: desiredDirection,
+            part_of_day: /afternoon/i.test(row.session_name || "") ? "afternoon" : "morning"
+          });
         }
       }
       setAllocations(planned);
@@ -468,7 +680,7 @@ export default function FacilityAllocation() {
         <div className="d-flex flex-wrap align-items-start justify-content-between gap-3">
           <div>
             <h5 className="mb-1">Eligible Clubs</h5>
-            <p className="text-muted small mb-0">Choose which clubs may be used for rink allocation. BowlPoint will keep each section at its already assigned venue; it will not move sections to other clubs.</p>
+            <p className="text-muted small mb-0">Choose which clubs may be used for rink allocation. Each section stays at one host club and one assigned green for the entire sectional competition. Sections are split as evenly as possible across that club’s active greens.</p>
           </div>
           <div className="dropdown position-relative" style={{ zIndex: clubsDropdownOpen ? 1055 : "auto" }}>
             <button
@@ -606,7 +818,7 @@ export default function FacilityAllocation() {
             {group.rows.map(a => <tr key={a.match_id}>
               <td><div>{a.playing_date}</div><div className="small text-muted">{a.session_name}</div></td>
               <td><div className="small text-muted">Round {a.round_number}, Match {a.match_number}</div><div>{a.team_a_label} <span className="text-muted">vs</span> {a.team_b_label}</div></td>
-              <td><select className="form-select form-select-sm" value={a.green_id} onChange={e => updateAllocation(a.match_id, "green_id", e.target.value)}><option value="">Select green</option>{greensForSelectedClubs.map(g => <option key={g.id} value={g.id}>{g.clubs?.short_name || g.clubs?.name || "Club"} — {g.name}</option>)}</select></td>
+              <td><select className="form-select form-select-sm" value={a.green_id} onChange={e => updateAllocation(a.match_id, "green_id", e.target.value)}><option value="">Select green</option>{greensForSelectedClubs.filter(g => !isSectionalFixture(a) || !sectionGreenById[a.section_id] || g.id === sectionGreenById[a.section_id]).map(g => <option key={g.id} value={g.id}>{g.clubs?.short_name || g.clubs?.name || "Club"} — {g.name}</option>)}</select></td>
               <td><select className="form-select form-select-sm" value={a.rink_id} onChange={e => updateAllocation(a.match_id, "rink_id", e.target.value)}><option value="">Select rink</option>{rinksForGreen(a.green_id).map(r => <option key={r.id} value={r.id}>{r.label}</option>)}</select></td>
               <td><select className="form-select form-select-sm" value={a.direction} onChange={e => updateAllocation(a.match_id, "direction", Number(e.target.value))}><option value={1}>Direction 1 (lengthwise)</option><option value={2} disabled={!greenById.get(a.green_id)?.allows_direction_change}>Direction 2 (across green)</option></select></td>
               <td>{a.repeat_warning ? <span className="badge bg-warning text-dark">Rink repeat</span> : <span className="badge bg-success">No repeat found</span>}</td>
