@@ -159,9 +159,6 @@ export default function FacilityAllocation() {
       sectionsByClub.get(clubId).push(section);
     }
 
-    // Reproduce the allocator's scheduled session grouping. Each round on a
-    // playing date occupies its scheduled session; count the section's games
-    // within that session to establish its simultaneous rink demand.
     const roundDayOrder = new Map();
     const dayRoundGroups = new Map();
     rounds.forEach(round => {
@@ -177,13 +174,13 @@ export default function FacilityAllocation() {
         });
     }
 
-    const demandBySection = new Map();
-    for (const section of sections) demandBySection.set(section.id, new Map());
+    const demandBySection = new Map(sections.map(section => [section.id, new Map()]));
 
     for (const match of matches) {
       if (!match.section_id || !demandBySection.has(match.section_id)) continue;
       const round = match.round || rounds.find(item => item.id === match.round_id);
       if (!round?.day?.playing_date) continue;
+
       const sessionIndex = roundDayOrder.get(round.id) ?? 0;
       const fallback = SESSIONS[sessionIndex];
       const existingBooking = bookings.find(booking =>
@@ -194,10 +191,33 @@ export default function FacilityAllocation() {
       const date = existingBooking?.playing_date || round.day.playing_date;
       const startsAt = existingBooking?.starts_at || localIso(date, fallback.start);
       const endsAt = existingBooking?.ends_at || localIso(date, fallback.end);
-      const slotKey = `${date}|${startsAt}|${endsAt}`;
+      const direction = Number(existingBooking?.direction || fallback.direction || 1);
+      const slotKey = `${date}|${startsAt}|${endsAt}|${direction}`;
+
       const sectionDemand = demandBySection.get(match.section_id);
       sectionDemand.set(slotKey, (sectionDemand.get(slotKey) || 0) + 1);
     }
+
+    const availableCapacity = (green, slotKey) => {
+      const [, startsAt, endsAt, directionValue] = slotKey.split("|");
+      const direction = Number(directionValue);
+      if (direction === 2 && !green.allows_direction_change) return 0;
+
+      const external = bookings.filter(booking =>
+        booking.competition_id !== competitionId &&
+        booking.status !== "cancelled" &&
+        booking.green_id === green.id &&
+        overlaps(startsAt, endsAt, booking.starts_at, booking.ends_at)
+      );
+
+      // A different direction occupies the full green. In the same direction,
+      // only the already-booked physical rink is unavailable.
+      if (external.some(booking => Number(booking.direction) !== direction)) return 0;
+
+      return green.rinks.filter(rink =>
+        !external.some(booking => booking.rink_id === rink.id)
+      ).length;
+    };
 
     for (const [clubId, clubSections] of sectionsByClub) {
       const clubGreens = greens
@@ -211,31 +231,21 @@ export default function FacilityAllocation() {
         throw new Error(`${clubs.find(club => club.id === clubId)?.name || "The selected club"} has no active greens with active rinks.`);
       }
 
-      const sectionLoads = clubSections.map(section => {
-        const slots = demandBySection.get(section.id) || new Map();
-        return {
-          section,
-          slots,
-          total: [...slots.values()].reduce((sum, count) => sum + count, 0),
-          peak: Math.max(0, ...slots.values())
-        };
-      }).sort((a, b) =>
+      const sectionLoads = clubSections.map(section => ({
+        section,
+        slots: demandBySection.get(section.id) || new Map(),
+        total: [...(demandBySection.get(section.id) || new Map()).values()].reduce((sum, count) => sum + count, 0),
+        peak: Math.max(0, ...(demandBySection.get(section.id) || new Map()).values())
+      })).sort((a, b) =>
         b.peak - a.peak ||
         b.total - a.total ||
         (a.section.section_number || 0) - (b.section.section_number || 0)
       );
 
-      const fitsOnGreen = (loads, green) => loads.every(load =>
-        [...load.slots.entries()].every(([slot, count]) => {
-          const alreadyAssigned = loads
-            .filter(other => map[other.section.id] === green.id)
-            .reduce((sum, other) => sum + (other.slots.get(slot) || 0), 0);
-          return alreadyAssigned + count <= green.rinks.length;
-        })
-      );
+      const allSlots = [...new Set(sectionLoads.flatMap(load => [...load.slots.keys()]))];
 
-      // First test whether ALL sections can stay on one green. Prefer an
-      // already-saved green if it can hold the complete simultaneous demand.
+      // Prefer a single green only when its genuinely free rinks (after
+      // accounting for every other competition) can host all sections.
       const savedGreenIdsForClub = [...new Set(clubSections
         .map(section => savedGreenIds?.[section.id])
         .filter(Boolean))];
@@ -244,11 +254,9 @@ export default function FacilityAllocation() {
         ...clubGreens.filter(green => !savedGreenIdsForClub.includes(green.id))
       ];
       const oneGreen = oneGreenCandidates.find(green =>
-        sectionLoads.every(load =>
-          [...load.slots.values()].every(count => count <= green.rinks.length)
-        ) &&
-        [...new Set(sectionLoads.flatMap(load => [...load.slots.keys()]))].every(slot =>
-          sectionLoads.reduce((sum, load) => sum + (load.slots.get(slot) || 0), 0) <= green.rinks.length
+        allSlots.every(slot =>
+          sectionLoads.reduce((sum, load) => sum + (load.slots.get(slot) || 0), 0) <=
+          availableCapacity(green, slot)
         )
       );
 
@@ -257,9 +265,9 @@ export default function FacilityAllocation() {
         continue;
       }
 
-      // More than one green is required. Keep every section intact and place
-      // the largest simultaneous demands first, choosing a green only when
-      // every affected session remains within that green's rink capacity.
+      // If one green cannot carry the full session demand, assign whole
+      // sections to different greens. Capacity is checked against free rinks,
+      // not nominal rink count, so another competition's bookings are honoured.
       const loadsByGreen = new Map(clubGreens.map(green => [green.id, new Map()]));
       for (const load of sectionLoads) {
         const savedId = savedGreenIds?.[load.section.id];
@@ -271,32 +279,30 @@ export default function FacilityAllocation() {
         const feasible = candidates.filter(green => {
           const current = loadsByGreen.get(green.id);
           return [...load.slots.entries()].every(([slot, count]) =>
-            (current.get(slot) || 0) + count <= green.rinks.length
+            (current.get(slot) || 0) + count <= availableCapacity(green, slot)
           );
         });
 
         if (!feasible.length) {
           const clubName = clubs.find(club => club.id === clubId)?.name || "The selected club";
           throw new Error(
-            `${clubName} does not have enough green capacity to keep every section together. ` +
-            `At least one session needs more simultaneous rinks than the available greens can provide. ` +
-            `Select another host club or schedule some rounds in another session.`
+            `${clubName} does not have enough unbooked rink capacity to keep every section together. ` +
+            `The calculation includes existing bookings from other competitions. Move a whole section to another eligible club or adjust the playing sessions.`
           );
         }
 
-        // Prefer the feasible green with the lowest projected peak utilisation;
-        // saved green is the tie-breaker to avoid unnecessary movement on reruns.
         feasible.sort((a, b) => {
           const score = green => {
             const current = loadsByGreen.get(green.id);
             let peak = 0;
             for (const [slot, count] of load.slots) {
-              peak = Math.max(peak, ((current.get(slot) || 0) + count) / green.rinks.length);
+              const capacity = Math.max(1, availableCapacity(green, slot));
+              peak = Math.max(peak, ((current.get(slot) || 0) + count) / capacity);
             }
             return peak;
           };
-          const scoreDiff = score(a) - score(b);
-          if (Math.abs(scoreDiff) > 0.0001) return scoreDiff;
+          const diff = score(a) - score(b);
+          if (Math.abs(diff) > 0.0001) return diff;
           if (a.id === savedId) return -1;
           if (b.id === savedId) return 1;
           return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
@@ -680,7 +686,7 @@ export default function FacilityAllocation() {
         <div className="d-flex flex-wrap align-items-start justify-content-between gap-3">
           <div>
             <h5 className="mb-1">Eligible Clubs</h5>
-            <p className="text-muted small mb-0">Choose which clubs may be used for rink allocation. Each section stays at one host club and one assigned green for the entire sectional competition. Sections are split as evenly as possible across that club’s active greens.</p>
+            <p className="text-muted small mb-0">Choose any club that may host a section, including clubs already hosting another competition. BowlPoint checks the shared Facility Calendar and uses only genuinely available rinks. Each section stays at one host club and one assigned green for the entire sectional competition.</p>
           </div>
           <div className="dropdown position-relative" style={{ zIndex: clubsDropdownOpen ? 1055 : "auto" }}>
             <button
@@ -824,7 +830,7 @@ export default function FacilityAllocation() {
               <td>{a.repeat_warning ? <span className="badge bg-warning text-dark">Rink repeat</span> : <span className="badge bg-success">No repeat found</span>}</td>
             </tr>)}
           </Fragment>)}
-        </tbody></table></div><div className="card-footer bg-white small text-muted">Allocation is checked against bookings in every competition. Only the selected eligible clubs are used for this competition. If saving stops on a conflict, resolve it and run allocation again.</div></div>}
+        </tbody></table></div><div className="card-footer bg-white small text-muted">Allocation is checked against bookings in every competition, including competitions already using the same club. Spare rinks may be shared when date, time and direction rules permit. Sections remain intact at their approved host club; playoff venue allocation remains separate.</div></div>}
       {!rowsToShow.length && <div className="alert alert-secondary">Generate an automatic allocation to review and save rink assignments for this competition.</div>}
     </>}
   </div>;

@@ -16,9 +16,9 @@ function getSectionByeTeam(section, roundNumber) {
         if (match.team_b_id) playingTeamIds.add(match.team_b_id);
     });
 
-    return (section.teams || []).find(team => !playingTeamIds.has(team.id)) || null;
+    return (section.teams || []).find(team => !playingTeamIds.has(team.competition_team_id || team.id)) || null;
 }
-import { generateCompetitionDrawProposal } from "./competitionDrawEngine";
+import { generateCompetitionDrawProposal, createRoundRobinRounds } from "./competitionDrawEngine";
 import { buildOfficialLadiesDistrictPairsProposal } from "./officialLadiesDistrictPairs";
 import { buildCompetitionScheduleProposal } from "./competitionScheduleEngine";
 import CompetitionLiveCard from "./CompetitionLiveCard";
@@ -41,9 +41,19 @@ function CompetitionWorkspace() {
     const [drawType, setDrawType] = useState("weekend");
     const [drawProposal, setDrawProposal] = useState(null);
     const [showDrawPlanner, setShowDrawPlanner] = useState(false);
+    const [isEditingDrawProposal, setIsEditingDrawProposal] = useState(false);
+    const [draggedProposalTeamId, setDraggedProposalTeamId] = useState("");
+    const [proposalEditMessage, setProposalEditMessage] = useState("");
     const [generatingDraw, setGeneratingDraw] = useState(false);
     const [confirmingDraw, setConfirmingDraw] = useState(false);
     const [confirmedDraw, setConfirmedDraw] = useState(null);
+    const [showSectionManager, setShowSectionManager] = useState(false);
+    const [swapSectionA, setSwapSectionA] = useState("");
+    const [swapSectionB, setSwapSectionB] = useState("");
+    const [swapTeamA, setSwapTeamA] = useState("");
+    const [swapTeamB, setSwapTeamB] = useState("");
+    const [savingSectionSwap, setSavingSectionSwap] = useState(false);
+    const [sectionManagerMessage, setSectionManagerMessage] = useState("");
     const [scheduleProposal, setScheduleProposal] = useState(null);
     const [scheduleAssignments, setScheduleAssignments] = useState([]);
     const [scorecardSummary, setScorecardSummary] = useState({ clubs: [], total: 0, unassigned: 0 });
@@ -2435,6 +2445,9 @@ function CompetitionWorkspace() {
             });
 
             setDrawProposal(proposal);
+            setIsEditingDrawProposal(false);
+            setDraggedProposalTeamId("");
+            setProposalEditMessage("");
             setShowDrawPlanner(true);
         } catch (error) {
             console.error("Error generating draw proposal:", error);
@@ -2457,6 +2470,9 @@ function CompetitionWorkspace() {
         try {
             const proposal = buildOfficialLadiesDistrictPairsProposal(activeTeams, drawType);
             setDrawProposal(proposal);
+            setIsEditingDrawProposal(false);
+            setDraggedProposalTeamId("");
+            setProposalEditMessage("");
             setShowDrawPlanner(true);
         } catch (error) {
             console.error("Unable to load official ladies draw proposal:", error);
@@ -2467,6 +2483,76 @@ function CompetitionWorkspace() {
     const clearDrawProposal = () => {
         setDrawProposal(null);
         setShowDrawPlanner(false);
+        setIsEditingDrawProposal(false);
+        setDraggedProposalTeamId("");
+        setProposalEditMessage("");
+    };
+
+    /*
+     * Edit the recommended draw while it is still a proposal.
+     * Dropping one entry onto another swaps their section memberships so
+     * every section retains its original size. This edits only local proposal
+     * state; Supabase is not touched until Confirm Draw is pressed.
+     */
+    const handleProposalEntryDrop = (targetSectionNumber, targetTeamId) => {
+        const sourceTeamId = draggedProposalTeamId;
+        setDraggedProposalTeamId("");
+
+        if (!sourceTeamId || sourceTeamId === targetTeamId || !drawProposal?.recommendedPlan) return;
+
+        const sourceSectionNumber = drawProposal.recommendedPlan.sections.find(section =>
+            section.teams.some(team => String(team.id) === String(sourceTeamId))
+        )?.number;
+        if (sourceSectionNumber === undefined) return;
+        if (Number(sourceSectionNumber) === Number(targetSectionNumber)) {
+            setProposalEditMessage("To move an entry, drop it onto an entry in a different section.");
+            return;
+        }
+
+        setDrawProposal(current => {
+            if (!current?.recommendedPlan?.sections) return current;
+
+            const sections = current.recommendedPlan.sections.map(section => ({
+                ...section,
+                teams: [...section.teams]
+            }));
+
+            let sourceSection = null;
+            let targetSection = null;
+            let sourceIndex = -1;
+            let targetIndex = -1;
+
+            sections.forEach(section => {
+                const sourceIndexInSection = section.teams.findIndex(team => String(team.id) === String(sourceTeamId));
+                const targetIndexInSection = section.teams.findIndex(team => String(team.id) === String(targetTeamId));
+                if (sourceIndexInSection >= 0) {
+                    sourceSection = section;
+                    sourceIndex = sourceIndexInSection;
+                }
+                if (targetIndexInSection >= 0) {
+                    targetSection = section;
+                    targetIndex = targetIndexInSection;
+                }
+            });
+
+            if (!sourceSection || !targetSection || Number(sourceSection.number) === Number(targetSection.number)) return current;
+
+            const sourceEntry = sourceSection.teams[sourceIndex];
+            const targetEntry = targetSection.teams[targetIndex];
+
+            sourceSection.teams[sourceIndex] = targetEntry;
+            targetSection.teams[targetIndex] = sourceEntry;
+
+            return {
+                ...current,
+                recommendedPlan: {
+                    ...current.recommendedPlan,
+                    sections
+                }
+            };
+        });
+
+        setProposalEditMessage("Entries swapped. Section sizes are unchanged. Confirm Draw will save this adjusted proposal.");
     };
 
     /*
@@ -2474,6 +2560,166 @@ function CompetitionWorkspace() {
      * The proposal is the source of truth here: we do not recalculate it.
      * Dates/competition_days remain untouched and can be scheduled later.
      */
+    const handleSwapSectionEntries = async () => {
+        if (!confirmedDraw?.sections?.length) return;
+
+        const sectionA = confirmedDraw.sections.find(section => section.id === swapSectionA);
+        const sectionB = confirmedDraw.sections.find(section => section.id === swapSectionB);
+        if (!sectionA || !sectionB || sectionA.id === sectionB.id) {
+            alert("Choose two different sections.");
+            return;
+        }
+        if (!swapTeamA || !swapTeamB || swapTeamA === swapTeamB) {
+            alert("Choose one entry from each section to swap.");
+            return;
+        }
+
+        const entryA = sectionA.teams.find(entry => String(entry.competition_team_id || entry.id) === String(swapTeamA));
+        const entryB = sectionB.teams.find(entry => String(entry.competition_team_id || entry.id) === String(swapTeamB));
+        if (!entryA || !entryB) {
+            alert("The selected entries could not be found in their sections. Refresh the draw and try again.");
+            return;
+        }
+
+        const hasStartedScoring = confirmedDraw.matches.some(match =>
+            match.completed ||
+            ["score_a", "score_b", "points_a", "points_b", "skins_a", "skins_b", "shots_for_a", "shots_for_b"]
+                .some(field => match[field] !== null && match[field] !== undefined && match[field] !== "")
+        );
+        if (hasStartedScoring) {
+            alert("Section entries cannot be changed after scoring has started. This protects recorded results and playoff progression.");
+            return;
+        }
+
+        const confirmed = window.confirm(
+            `Swap these entries?\n\n${sectionA.section_name}: ${getTeamBaseName(teams.find(team => team.id === entryA.competition_team_id) || entryA)}\n` +
+            `with\n${sectionB.section_name}: ${getTeamBaseName(teams.find(team => team.id === entryB.competition_team_id) || entryB)}\n\n` +
+            `Section sizes will remain unchanged and BowlPoint will regenerate the sectional fixtures.`
+        );
+        if (!confirmed) return;
+
+        setSavingSectionSwap(true);
+        setSectionManagerMessage("");
+
+        const oldMemberships = [
+            { id: entryA.id, section_id: sectionA.id },
+            { id: entryB.id, section_id: sectionB.id }
+        ];
+        const newMemberships = [
+            { id: entryA.id, section_id: sectionB.id },
+            { id: entryB.id, section_id: sectionA.id }
+        ];
+        const originalFixtureRows = [];
+        const fixtureUpdates = [];
+
+        try {
+            const actualTeamId = entry => entry.competition_team_id || entry.id;
+            const toDrawTeam = entry => {
+                const teamId = actualTeamId(entry);
+                const fullTeam = teams.find(team => team.id === teamId) || entry;
+                return {
+                    id: teamId,
+                    name: getTeamBaseName(fullTeam),
+                    clubId: fullTeam.club_id || null,
+                    clubName: fullTeam.clubs?.name || ""
+                };
+            };
+
+            const nextSectionTeams = new Map([
+                [sectionA.id, sectionA.teams.map(entry => entry === entryA ? entryB : entry).map(toDrawTeam)],
+                [sectionB.id, sectionB.teams.map(entry => entry === entryB ? entryA : entry).map(toDrawTeam)]
+            ]);
+
+            for (const section of [sectionA, sectionB]) {
+                const generatedRounds = createRoundRobinRounds(nextSectionTeams.get(section.id));
+                for (const generatedRound of generatedRounds) {
+                    const roundRecord = confirmedDraw.rounds.find(round =>
+                        Number(round.round_number) === Number(generatedRound.number)
+                    );
+                    if (!roundRecord) {
+                        throw new Error(`The saved draw is missing sectional round ${generatedRound.number}.`);
+                    }
+
+                    const existingMatches = confirmedDraw.matches
+                        .filter(match => match.section_id === section.id && match.round_id === roundRecord.id)
+                        .sort((a, b) => Number(a.match_number) - Number(b.match_number));
+
+                    if (existingMatches.length !== generatedRound.matches.length) {
+                        throw new Error(
+                            `${section.section_name} has a different number of saved fixtures in Round ${generatedRound.number}. ` +
+                            `The swap has been cancelled to protect the existing schedule.`
+                        );
+                    }
+
+                    generatedRound.matches.forEach((generatedMatch, index) => {
+                        const savedMatch = existingMatches[index];
+                        originalFixtureRows.push({
+                            id: savedMatch.id,
+                            team_a_id: savedMatch.team_a_id,
+                            team_b_id: savedMatch.team_b_id
+                        });
+                        fixtureUpdates.push({
+                            id: savedMatch.id,
+                            team_a_id: generatedMatch.teamAId,
+                            team_b_id: generatedMatch.teamBId
+                        });
+                    });
+                }
+            }
+
+            // Update the two section memberships, then update the existing fixture
+            // rows in place. Keeping fixture IDs preserves their saved dates and
+            // facility-booking links; only the participating teams are regenerated.
+            for (const membership of newMemberships) {
+                const { error } = await supabase
+                    .from("competition_section_teams")
+                    .update({ section_id: membership.section_id })
+                    .eq("id", membership.id);
+                if (error) throw error;
+            }
+
+            for (const fixture of fixtureUpdates) {
+                const { error } = await supabase
+                    .from("competition_matches")
+                    .update({
+                        team_a_id: fixture.team_a_id,
+                        team_b_id: fixture.team_b_id
+                    })
+                    .eq("id", fixture.id);
+                if (error) throw error;
+            }
+
+            await loadData();
+            setSectionManagerMessage(
+                "Entries swapped and sectional fixtures regenerated. Existing dates and rink bookings were retained; rerun rink allocation to refresh team rink-repeat optimisation."
+            );
+            setSwapTeamA("");
+            setSwapTeamB("");
+        } catch (error) {
+            console.error("Unable to swap section entries:", error);
+
+            // Best-effort rollback if a database update fails part-way through.
+            for (const membership of oldMemberships) {
+                await supabase.from("competition_section_teams")
+                    .update({ section_id: membership.section_id })
+                    .eq("id", membership.id);
+            }
+            for (const fixture of originalFixtureRows) {
+                await supabase.from("competition_matches")
+                    .update({
+                        team_a_id: fixture.team_a_id,
+                        team_b_id: fixture.team_b_id
+                    })
+                    .eq("id", fixture.id);
+            }
+
+            await loadData();
+            alert(`Unable to swap section entries. The original draw has been restored where possible.\n\n${error.message}`);
+        } finally {
+            setSavingSectionSwap(false);
+        }
+    };
+
     const handleConfirmDraw = async () => {
         if (!drawProposal?.recommendedPlan) {
             alert("Please calculate a draw proposal first.");
@@ -2727,6 +2973,8 @@ function CompetitionWorkspace() {
             if (competitionError) throw competitionError;
 
             setDrawProposal(null);
+            setIsEditingDrawProposal(false);
+            setDraggedProposalTeamId("");
             setShowDrawPlanner(false);
             await loadData();
 
@@ -4494,6 +4742,66 @@ function CompetitionWorkspace() {
                             ].map(([label,value]) => <div className="col-md-3" key={label}><div className="card border h-100"><div className="card-body"><div className="text-muted small">{label}</div><div className="fs-3 fw-bold">{value}</div></div></div></div>)}
                         </div>
                         <div className="alert alert-success"><strong>Draw is confirmed.</strong><div className="small mt-1">Sections, fixtures and playoff rounds below are read directly from Supabase. Dates and venues have not been assigned yet.</div></div>
+                        <div className="card border mb-4">
+                            <div className="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
+                                <div>
+                                    <strong><i className="bi bi-arrow-left-right me-2"></i>Manage Section Entries</strong>
+                                    <div className="small text-muted mt-1">Swap individual Singles entries or complete Pairs, Trips and Fours teams between sections. Section sizes remain unchanged.</div>
+                                </div>
+                                <button type="button" className="btn btn-outline-primary btn-sm" onClick={() => setShowSectionManager(value => !value)}>
+                                    {showSectionManager ? "Close" : "Manage Sections"}
+                                </button>
+                            </div>
+                            {showSectionManager && <div className="card-body">
+                                <div className="alert alert-warning py-2 small">
+                                    Entry changes are available only before scoring starts. BowlPoint regenerates sectional opponents while preserving round dates and fixture IDs. Review and rerun rink allocation afterwards to refresh team rink-repeat optimisation.
+                                </div>
+                                {sectionManagerMessage && <div className="alert alert-success py-2">{sectionManagerMessage}</div>}
+                                <div className="row g-3 align-items-end">
+                                    <div className="col-md-3">
+                                        <label className="form-label fw-semibold">From section</label>
+                                        <select className="form-select" value={swapSectionA} onChange={event => { setSwapSectionA(event.target.value); setSwapTeamA(""); }}>
+                                            <option value="">Choose section</option>
+                                            {confirmedDraw.sections.map(section => <option key={section.id} value={section.id}>{section.section_name}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="col-md-3">
+                                        <label className="form-label fw-semibold">Entry to move</label>
+                                        <select className="form-select" value={swapTeamA} onChange={event => setSwapTeamA(event.target.value)} disabled={!swapSectionA}>
+                                            <option value="">Choose entry</option>
+                                            {(confirmedDraw.sections.find(section => section.id === swapSectionA)?.teams || []).map(entry => {
+                                                const teamId = entry.competition_team_id || entry.id;
+                                                const fullTeam = teams.find(team => team.id === teamId) || entry;
+                                                return <option key={teamId} value={teamId}>{getTeamBaseName(fullTeam)}</option>;
+                                            })}
+                                        </select>
+                                    </div>
+                                    <div className="col-md-3">
+                                        <label className="form-label fw-semibold">Swap with section</label>
+                                        <select className="form-select" value={swapSectionB} onChange={event => { setSwapSectionB(event.target.value); setSwapTeamB(""); }}>
+                                            <option value="">Choose section</option>
+                                            {confirmedDraw.sections.filter(section => section.id !== swapSectionA).map(section => <option key={section.id} value={section.id}>{section.section_name}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="col-md-3">
+                                        <label className="form-label fw-semibold">Entry to swap</label>
+                                        <select className="form-select" value={swapTeamB} onChange={event => setSwapTeamB(event.target.value)} disabled={!swapSectionB}>
+                                            <option value="">Choose entry</option>
+                                            {(confirmedDraw.sections.find(section => section.id === swapSectionB)?.teams || []).map(entry => {
+                                                const teamId = entry.competition_team_id || entry.id;
+                                                const fullTeam = teams.find(team => team.id === teamId) || entry;
+                                                return <option key={teamId} value={teamId}>{getTeamBaseName(fullTeam)}</option>;
+                                            })}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div className="d-flex justify-content-end mt-3">
+                                    <button type="button" className="btn btn-primary" onClick={handleSwapSectionEntries} disabled={savingSectionSwap || !swapTeamA || !swapTeamB || !swapSectionA || !swapSectionB}>
+                                        {savingSectionSwap ? "Updating draw…" : "Swap Entries & Regenerate Fixtures"}
+                                    </button>
+                                </div>
+                            </div>}
+                        </div>
                         <div className="row g-4">
                             <div className="col-lg-8">
                                 <div className="card border"><div className="card-header bg-white"><strong>Sections & Sectional Fixtures</strong></div><div className="card-body">
@@ -4796,13 +5104,44 @@ function CompetitionWorkspace() {
                                                         </div>
                                                     </div>
 
-                                                    <span className="badge bg-success">Recommended</span>
+                                                    <div className="d-flex align-items-center gap-2">
+                                                        {isEditingDrawProposal && (
+                                                            <span className="badge bg-info text-dark">Drag & drop enabled</span>
+                                                        )}
+                                                        <span className="badge bg-success">Recommended</span>
+                                                    </div>
 
                                                 </div>
 
                                             </div>
 
                                             <div className="card-body">
+
+                                                <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                                                    <div className="small text-muted">
+                                                        {isEditingDrawProposal
+                                                            ? "Drag an entry onto an entry in another section to swap them. Section sizes will remain unchanged."
+                                                            : "You can balance the proposed sections before confirming the draw."}
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        className={`btn btn-sm ${isEditingDrawProposal ? "btn-success" : "btn-outline-primary"}`}
+                                                        onClick={() => {
+                                                            setIsEditingDrawProposal(value => !value);
+                                                            setDraggedProposalTeamId("");
+                                                            setProposalEditMessage("");
+                                                        }}
+                                                    >
+                                                        <i className={`bi ${isEditingDrawProposal ? "bi-check-lg" : "bi-arrows-move"} me-2`}></i>
+                                                        {isEditingDrawProposal ? "Done Editing" : "Edit Sections"}
+                                                    </button>
+                                                </div>
+
+                                                {proposalEditMessage && (
+                                                    <div className="alert alert-success py-2 mb-3" role="status">
+                                                        {proposalEditMessage}
+                                                    </div>
+                                                )}
 
                                                 {drawProposal.recommendedPlan.sections.map(section => (
 
@@ -4822,7 +5161,37 @@ function CompetitionWorkspace() {
                                                         <div className="row g-2">
                                                             {section.teams.map(team => (
                                                                 <div className="col-md-6" key={team.id}>
-                                                                    <div className="small border rounded px-2 py-1 bg-light">
+                                                                    <div
+                                                                        className={`small border rounded px-2 py-2 ${
+                                                                            isEditingDrawProposal ? "bg-white border-primary" : "bg-light"
+                                                                        }`}
+                                                                        draggable={isEditingDrawProposal}
+                                                                        onDragStart={event => {
+                                                                            if (!isEditingDrawProposal) return;
+                                                                            setDraggedProposalTeamId(String(team.id));
+                                                                            event.dataTransfer.effectAllowed = "move";
+                                                                            event.dataTransfer.setData("text/plain", String(team.id));
+                                                                        }}
+                                                                        onDragOver={event => {
+                                                                            if (isEditingDrawProposal) {
+                                                                                event.preventDefault();
+                                                                                event.dataTransfer.dropEffect = "move";
+                                                                            }
+                                                                        }}
+                                                                        onDrop={event => {
+                                                                            if (!isEditingDrawProposal) return;
+                                                                            event.preventDefault();
+                                                                            const draggedId = event.dataTransfer.getData("text/plain");
+                                                                            if (draggedId) setDraggedProposalTeamId(draggedId);
+                                                                            handleProposalEntryDrop(section.number, team.id);
+                                                                        }}
+                                                                        onDragEnd={() => setDraggedProposalTeamId("")}
+                                                                        title={isEditingDrawProposal ? "Drag this entry onto an entry in another section to swap" : ""}
+                                                                        style={isEditingDrawProposal ? { cursor: "grab" } : undefined}
+                                                                    >
+                                                                        {isEditingDrawProposal && (
+                                                                            <i className="bi bi-grip-vertical text-primary me-1" aria-hidden="true"></i>
+                                                                        )}
                                                                         <TeamDisplay team={team} />
                                                                         {team.clubName && (
                                                                             <span className="text-muted"> — {team.clubName}</span>
