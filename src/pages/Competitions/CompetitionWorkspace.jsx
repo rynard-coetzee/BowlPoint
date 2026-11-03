@@ -746,10 +746,16 @@ function CompetitionWorkspace() {
             return {
                 key: day.key,
                 dayNumber: index + 1,
-                label: day.label,
+                label: (scheduleProposal.competitionType === "weekend" && existing?.playing_date)
+                    ? `${(day.label.match(/^Weekend\\s+\\d+/i) || [])[0] || day.label} — ${new Date(`${existing.playing_date}T12:00:00`).toLocaleDateString("en-ZA", { weekday: "long" })}`
+                    : day.label,
                 typeLabel: day.typeLabel,
                 playing_date: existing?.playing_date || "",
-                name: existing?.name || day.label,
+                name: existing?.name || (
+                    scheduleProposal.competitionType === "weekend" && existing?.playing_date
+                        ? `${(day.label.match(/^Weekend\\s+\\d+/i) || [])[0] || day.label} — ${new Date(`${existing.playing_date}T12:00:00`).toLocaleDateString("en-ZA", { weekday: "long" })}`
+                        : day.label
+                ),
                 venue_club_id: existing?.venue_club_id || "",
                 status: existing?.status || "scheduled",
                 existing_id: existing?.id || null
@@ -760,11 +766,40 @@ function CompetitionWorkspace() {
     }, [scheduleProposal, playingDays]);
 
     const handleScheduleAssignmentChange = (index, field, value) => {
-        setScheduleAssignments(prev => prev.map((assignment, itemIndex) =>
-            itemIndex === index
-                ? { ...assignment, [field]: value }
-                : assignment
-        ));
+        setScheduleAssignments(prev => prev.map((assignment, itemIndex) => {
+            if (itemIndex !== index) return assignment;
+
+            // For weekend competitions, the proposed Saturday/Sunday label is
+            // only a suggestion. The secretary may choose either weekend day.
+            // Keep the visible/session name in sync when the date changes,
+            // without overwriting a custom name entered by the secretary.
+            if (field === "playing_date" && scheduleProposal?.competitionType === "weekend") {
+                const selectedDate = value ? new Date(`${value}T12:00:00`) : null;
+                const selectedDay = selectedDate
+                    ? selectedDate.toLocaleDateString("en-ZA", { weekday: "long" })
+                    : "";
+                const previousDefaultName = assignment.label;
+                const hasDefaultWeekendName = /^Weekend\\s+\\d+\\s+—\\s+(Saturday|Sunday)$/i.test(assignment.name || "");
+                const weekendPrefix = (assignment.label.match(/^Weekend\\s+\\d+/i) || [])[0]
+                    || (assignment.name.match(/^Weekend\\s+\\d+/i) || [])[0]
+                    || "Weekend";
+
+                const nextLabel = selectedDay
+                    ? `${weekendPrefix} — ${selectedDay}`
+                    : assignment.label;
+
+                return {
+                    ...assignment,
+                    playing_date: value,
+                    label: nextLabel,
+                    name: (assignment.name === previousDefaultName || hasDefaultWeekendName)
+                        ? nextLabel
+                        : assignment.name
+                };
+            }
+
+            return { ...assignment, [field]: value };
+        }));
     };
 
     const isValidScheduleDate = (dateValue, dayLabel, competitionType) => {
@@ -774,9 +809,9 @@ function CompetitionWorkspace() {
         const dayOfWeek = date.getDay();
 
         if (competitionType === "weekend") {
-            if (dayLabel.includes("Saturday")) return dayOfWeek === 6;
-            if (dayLabel.includes("Sunday")) return dayOfWeek === 0;
-            return false;
+            // Any Saturday or Sunday is valid for every weekend session,
+            // including playoff sessions.
+            return dayOfWeek === 6 || dayOfWeek === 0;
         }
 
         return dayOfWeek !== 0 && dayOfWeek !== 6;
@@ -798,8 +833,7 @@ function CompetitionWorkspace() {
 
             if (!isValidScheduleDate(assignment.playing_date, assignment.label, competitionType)) {
                 if (competitionType === "weekend") {
-                    const expected = assignment.label.includes("Saturday") ? "Saturday" : "Sunday";
-                    alert(`${assignment.label} must be scheduled on a ${expected}.`);
+                    alert(`${assignment.label} must be scheduled on a Saturday or Sunday.`);
                 } else {
                     alert(`${assignment.label} must be scheduled on a weekday.`);
                 }
@@ -4978,8 +5012,8 @@ function CompetitionWorkspace() {
 
                         {scheduleProposal.competitionType === "weekend" && (
                             <div className="alert alert-info">
-                                <strong>Weekend rule:</strong> maximum 3 rounds Saturday and 3 rounds Sunday.
-                                Playoffs are placed on Sunday only when the complete playoff stage fits into the remaining Sunday capacity; otherwise the playoffs move to the next available Saturday.
+                                <strong>Weekend rule:</strong> the proposed schedule groups up to 3 rounds per playing session.
+                                For every session, including playoffs, you may select either a Saturday or a Sunday. The suggested day is not compulsory.
                             </div>
                         )}
 
@@ -5052,7 +5086,9 @@ function CompetitionWorkspace() {
                                                 />
                                                 <div className="small text-muted mt-1">
                                                     {scheduleProposal.competitionType === "weekend"
-                                                        ? (assignment.label.includes("Saturday") ? "Saturday required" : "Sunday required")
+                                                        ? (assignment.playing_date
+                                                            ? `Selected: ${new Date(`${assignment.playing_date}T12:00:00`).toLocaleDateString("en-ZA", { weekday: "long" })} — Saturday or Sunday allowed`
+                                                            : "Saturday or Sunday allowed")
                                                         : "Weekday required"}
                                                 </div>
                                             </div>
