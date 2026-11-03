@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import {
     getCompetitionReportData,
-    getReportCompetitions
+    getReportCompetitions,
+    getPlayerHistoryReportData
 } from "../../services/supabase/reportService";
 import "./Reports.css";
 
@@ -10,6 +11,7 @@ const REPORT_TYPES = [
     { key: "standings", label: "Final Standings", icon: "trophy-fill" },
     { key: "results", label: "Match Results", icon: "list-ol" },
     { key: "players", label: "Player Performance", icon: "people-fill" },
+    { key: "player-history", label: "Player History", icon: "person-lines-fill" },
     { key: "clubs", label: "Club Performance", icon: "building-fill" }
 ];
 
@@ -17,6 +19,33 @@ function getPlayerLabel(player) {
     if (!player) return "Unknown player";
     const givenName = player.nickname || player.first_name || "";
     return `${givenName} ${player.last_name || ""}`.trim() || player.display_name || "Unknown player";
+}
+
+function getCompetitionYear(competition, rounds = []) {
+    const explicitDate = competition?.start_date || competition?.end_date;
+    if (explicitDate) {
+        const year = String(explicitDate).match(/\b(?:19|20)\d{2}\b/);
+        if (year) return year[0];
+    }
+
+    const scheduledDates = rounds
+        .filter(round => round.competition_id === competition?.id)
+        .flatMap(round => {
+            const day = round.competition_days;
+            const values = Array.isArray(day) ? day : [day];
+            return values.map(item => item?.playing_date).filter(Boolean);
+        })
+        .sort();
+    if (scheduledDates.length) {
+        const year = String(scheduledDates[0]).match(/\b(?:19|20)\d{2}\b/);
+        if (year) return year[0];
+    }
+
+    const title = String(competition?.name || "");
+    const season = title.match(/\b((?:19|20)\d{2})\s*[-/]\s*((?:19|20)\d{2})\b/);
+    if (season) return season[2];
+    const namedYear = title.match(/\b(?:19|20)\d{2}\b/);
+    return namedYear ? namedYear[0] : "—";
 }
 
 function getTeamLabel(team, allTeams = []) {
@@ -71,6 +100,10 @@ function Reports() {
     const [selectedCompetitionId, setSelectedCompetitionId] = useState("");
     const [reportType, setReportType] = useState("summary");
     const [reportData, setReportData] = useState(null);
+    const [playerHistoryData, setPlayerHistoryData] = useState(null);
+    const [selectedPlayerId, setSelectedPlayerId] = useState("");
+    const [playerSearch, setPlayerSearch] = useState("");
+    const [loadingPlayerHistory, setLoadingPlayerHistory] = useState(false);
     const [loadingCompetitions, setLoadingCompetitions] = useState(true);
     const [loadingReport, setLoadingReport] = useState(false);
     const [error, setError] = useState("");
@@ -115,6 +148,310 @@ function Reports() {
 
         load();
     }, [selectedCompetitionId]);
+
+    useEffect(() => {
+        if (reportType !== "player-history" || !competitions.length || playerHistoryData) return;
+
+        let cancelled = false;
+        const load = async () => {
+            try {
+                setLoadingPlayerHistory(true);
+                setError("");
+                const data = await getPlayerHistoryReportData(competitions.map(item => item.id));
+                if (!cancelled) setPlayerHistoryData(data);
+            } catch (loadError) {
+                console.error("Unable to load player history:", loadError);
+                if (!cancelled) setError(loadError.message || "Unable to load player history.");
+            } finally {
+                if (!cancelled) setLoadingPlayerHistory(false);
+            }
+        };
+        load();
+        return () => { cancelled = true; };
+    }, [reportType, competitions, playerHistoryData]);
+
+    const playerHistoryRows = useMemo(() => {
+        if (!playerHistoryData) return [];
+        const competitionById = new Map(competitions.map(item => [item.id, item]));
+        const teamById = new Map(playerHistoryData.teams.map(team => [team.id, team]));
+        const roundById = new Map(playerHistoryData.rounds.map(round => [round.id, round]));
+        const matchesByTeam = new Map();
+
+        playerHistoryData.matches.forEach(match => {
+            if (!match.completed || !match.team_a_id || !match.team_b_id) return;
+            const scoreAValue = match.score_a ?? match.shots_for_a;
+            const scoreBValue = match.score_b ?? match.shots_for_b;
+            if (scoreAValue === null || scoreAValue === undefined || scoreAValue === "" ||
+                scoreBValue === null || scoreBValue === undefined || scoreBValue === "") return;
+            const scoreA = Number(scoreAValue);
+            const scoreB = Number(scoreBValue);
+            if (!Number.isFinite(scoreA) || !Number.isFinite(scoreB)) return;
+            const outcome = (teamId) => {
+                if (scoreA === scoreB) return "draw";
+                return (teamId === match.team_a_id ? scoreA > scoreB : scoreB > scoreA) ? "win" : "loss";
+            };
+            [match.team_a_id, match.team_b_id].forEach(teamId => {
+                if (!matchesByTeam.has(teamId)) matchesByTeam.set(teamId, []);
+                matchesByTeam.get(teamId).push({ match, outcome: outcome(teamId) });
+            });
+        });
+
+        const grouped = new Map();
+        playerHistoryData.teamPlayers.forEach(rosterRow => {
+            const player = rosterRow.players;
+            const team = teamById.get(rosterRow.competition_team_id);
+            if (!player?.id || !team) return;
+            const competition = competitionById.get(team.competition_id);
+            if (!competition) return;
+            const key = `${player.id}|${competition.id}|${team.id}`;
+            if (!grouped.has(key)) {
+                const results = matchesByTeam.get(team.id) || [];
+                const stats = { played: results.length, wins: 0, draws: 0, losses: 0 };
+                results.forEach(result => {
+                    if (result.outcome === "win") stats.wins += 1;
+                    else if (result.outcome === "draw") stats.draws += 1;
+                    else if (result.outcome === "loss") stats.losses += 1;
+                });
+                grouped.set(key, {
+                    key,
+                    player,
+                    playerId: player.id,
+                    competition,
+                    year: getCompetitionYear(
+                        competition,
+                        playerHistoryData.rounds.filter(round => round.competition_id === competition.id)
+                    ),
+                    team,
+                    clubName: team.clubs?.name || "—",
+                    teamName: getTeamLabel(team, playerHistoryData.teams),
+                    position: rosterRow.position || "—",
+                    played: stats.played,
+                    wins: stats.wins,
+                    draws: stats.draws,
+                    losses: stats.losses,
+                    winRate: stats.played ? Math.round((stats.wins / stats.played) * 100) : 0
+                });
+            }
+        });
+
+        return [...grouped.values()].sort((a, b) =>
+            getPlayerLabel(a.player).localeCompare(getPlayerLabel(b.player)) ||
+            String(b.competition.start_date || "").localeCompare(String(a.competition.start_date || "")) ||
+            String(a.competition.name || "").localeCompare(String(b.competition.name || ""))
+        );
+    }, [playerHistoryData, competitions]);
+
+    const playerHistoryPeople = useMemo(() => {
+        const byPlayer = new Map();
+        playerHistoryRows.forEach(row => {
+            if (!byPlayer.has(row.playerId)) byPlayer.set(row.playerId, row.player);
+        });
+        return [...byPlayer.values()].sort((a, b) =>
+            getPlayerLabel(a).localeCompare(getPlayerLabel(b))
+        );
+    }, [playerHistoryRows]);
+
+    const filteredPlayerHistoryPeople = useMemo(() => {
+        const term = playerSearch.trim().toLowerCase();
+        return playerHistoryPeople.filter(player =>
+            !term || getPlayerLabel(player).toLowerCase().includes(term)
+        );
+    }, [playerHistoryPeople, playerSearch]);
+
+    const selectedPlayerHistory = useMemo(() => {
+        if (!selectedPlayerId) return [];
+        return playerHistoryRows
+            .filter(row => row.playerId === selectedPlayerId)
+            .sort((a, b) =>
+                String(b.competition.start_date || "").localeCompare(String(a.competition.start_date || "")) ||
+                String(a.competition.name || "").localeCompare(String(b.competition.name || ""))
+            );
+    }, [playerHistoryRows, selectedPlayerId]);
+
+    const selectedPlayerTotals = useMemo(() => selectedPlayerHistory.reduce((total, row) => ({
+        competitions: total.competitions + 1,
+        played: total.played + row.played,
+        wins: total.wins + row.wins,
+        draws: total.draws + row.draws,
+        losses: total.losses + row.losses
+    }), { competitions: 0, played: 0, wins: 0, draws: 0, losses: 0 }), [selectedPlayerHistory]);
+
+    const selectedPlayerMedals = useMemo(() => {
+        if (!selectedPlayerId || !playerHistoryData) return [];
+
+        const teamById = new Map(playerHistoryData.teams.map(team => [team.id, team]));
+        const roundById = new Map(playerHistoryData.rounds.map(round => [round.id, round]));
+        const rosterTeamIds = new Set(
+            playerHistoryData.teamPlayers
+                .filter(row => row.player_id === selectedPlayerId)
+                .map(row => row.competition_team_id)
+        );
+        const medals = [];
+
+        // Some competition formats store the played score in shots_for_a/b
+        // rather than score_a/b. Accept either representation.
+        const scoreFor = (match, side) => {
+            const primary = match[`score_${side}`];
+            const fallback = match[`shots_for_${side}`];
+            const value = primary ?? fallback;
+            return value === null || value === undefined || value === ""
+                ? null
+                : Number(value);
+        };
+        const hasResult = match => {
+            if (!match?.completed || !match.team_a_id || !match.team_b_id) return false;
+            const a = scoreFor(match, "a");
+            const b = scoreFor(match, "b");
+            return Number.isFinite(a) && Number.isFinite(b) && a !== b;
+        };
+        const winningTeamId = match =>
+            scoreFor(match, "a") > scoreFor(match, "b") ? match.team_a_id : match.team_b_id;
+        const losingTeamId = match =>
+            scoreFor(match, "a") > scoreFor(match, "b") ? match.team_b_id : match.team_a_id;
+
+        const addMedal = (competition, teamId, medal, sort) => {
+            if (!rosterTeamIds.has(teamId)) return;
+            const team = teamById.get(teamId);
+            const roster = playerHistoryData.teamPlayers.find(
+                item => item.player_id === selectedPlayerId &&
+                    item.competition_team_id === teamId
+            );
+            if (!team || !roster) return;
+            medals.push({
+                key: `${competition.id}|${teamId}|${medal}`,
+                medal,
+                sort,
+                competition,
+                year: getCompetitionYear(
+                    competition,
+                    playerHistoryData.rounds.filter(round => round.competition_id === competition.id)
+                ),
+                team,
+                teamName: getTeamLabel(team, playerHistoryData.teams),
+                clubName: team.clubs?.name || "—",
+                position: roster.position || "—"
+            });
+        };
+
+        competitions
+            .filter(competition => String(competition.status || "").toLowerCase() === "completed")
+            .forEach(competition => {
+                const competitionMatches = playerHistoryData.matches.filter(
+                    match => match.competition_id === competition.id && hasResult(match)
+                );
+                const competitionRounds = playerHistoryData.rounds.filter(
+                    round => round.competition_id === competition.id
+                );
+                const getRoundName = match =>
+                    String(roundById.get(match.round_id)?.round_name || "").trim().toLowerCase();
+
+                const finalMatches = competitionMatches.filter(match => {
+                    const name = getRoundName(match);
+                    return /final/.test(name) && !/semi|quarter|third.?place/.test(name);
+                });
+                const semiMatches = competitionMatches.filter(match =>
+                    /semi[\s-]*final/.test(getRoundName(match))
+                );
+
+                if (finalMatches.length === 1) {
+                    // Knockout competitions: winner/runner-up from the final,
+                    // shared bronze for both losing semi-finalists.
+                    const finalMatch = finalMatches[0];
+                    const goldTeamId = winningTeamId(finalMatch);
+                    const silverTeamId = losingTeamId(finalMatch);
+
+                    addMedal(competition, goldTeamId, "Gold", 1);
+                    addMedal(competition, silverTeamId, "Silver", 2);
+
+                    [...new Set(semiMatches.map(losingTeamId))]
+                        .filter(teamId => teamId !== goldTeamId && teamId !== silverTeamId)
+                        .forEach(teamId => addMedal(competition, teamId, "Bronze", 3));
+
+                    return;
+                }
+
+                // League / round-robin / Masters formats may have no Final
+                // round. In those competitions, award medals from the final
+                // completed standings using the same points and shot tie-breaks
+                // as the competition standings report.
+                const hasKnockoutRounds = competitionRounds.some(round =>
+                    /\b(final|semi[\s-]*final|quarter[\s-]*final)\b/i.test(String(round.round_name || ""))
+                );
+                if (hasKnockoutRounds || !competitionMatches.length) return;
+
+                const scoring = competition.scoring || {};
+                const winPoints = Number(scoring.win ?? 2);
+                const drawPoints = Number(scoring.draw ?? 1);
+                const lossPoints = Number(scoring.loss ?? 0);
+                const standings = new Map();
+
+                playerHistoryData.teams
+                    .filter(team => team.competition_id === competition.id)
+                    .forEach(team => standings.set(team.id, {
+                        team,
+                        played: 0,
+                        wins: 0,
+                        draws: 0,
+                        losses: 0,
+                        points: 0,
+                        shotsFor: 0,
+                        shotsAgainst: 0
+                    }));
+
+                competitionMatches.forEach(match => {
+                    const a = standings.get(match.team_a_id);
+                    const b = standings.get(match.team_b_id);
+                    if (!a || !b) return;
+                    const scoreA = scoreFor(match, "a");
+                    const scoreB = scoreFor(match, "b");
+
+                    a.played += 1;
+                    b.played += 1;
+                    a.shotsFor += scoreA;
+                    a.shotsAgainst += scoreB;
+                    b.shotsFor += scoreB;
+                    b.shotsAgainst += scoreA;
+
+                    if (scoreA > scoreB) {
+                        a.wins += 1;
+                        b.losses += 1;
+                        a.points += Number(match.points_a ?? winPoints);
+                        b.points += Number(match.points_b ?? lossPoints);
+                    } else if (scoreB > scoreA) {
+                        b.wins += 1;
+                        a.losses += 1;
+                        a.points += Number(match.points_a ?? lossPoints);
+                        b.points += Number(match.points_b ?? winPoints);
+                    } else {
+                        a.draws += 1;
+                        b.draws += 1;
+                        a.points += Number(match.points_a ?? drawPoints);
+                        b.points += Number(match.points_b ?? drawPoints);
+                    }
+                });
+
+                const rankedTeams = [...standings.values()]
+                    .filter(row => row.played > 0)
+                    .sort((a, b) =>
+                        b.points - a.points ||
+                        (b.shotsFor - b.shotsAgainst) - (a.shotsFor - a.shotsAgainst) ||
+                        b.shotsFor - a.shotsFor ||
+                        getTeamLabel(a.team, playerHistoryData.teams).localeCompare(
+                            getTeamLabel(b.team, playerHistoryData.teams)
+                        )
+                    );
+
+                rankedTeams.slice(0, 3).forEach((row, index) => {
+                    addMedal(competition, row.team.id, ["Gold", "Silver", "Bronze"][index], index + 1);
+                });
+            });
+
+        return medals.sort((a, b) =>
+            a.sort - b.sort ||
+            String(b.competition.start_date || "").localeCompare(String(a.competition.start_date || "")) ||
+            String(a.competition.name || "").localeCompare(String(b.competition.name || ""))
+        );
+    }, [selectedPlayerId, playerHistoryData, competitions]);
 
     const stats = useMemo(() => {
         if (!reportData) return null;
@@ -398,13 +735,29 @@ function Reports() {
     };
 
     const exportCsv = () => {
-        if (!reportData) return;
+        if (!reportData && reportType !== "player-history") return;
 
         let headers = [];
         let rows = [];
         const escape = value => `"${String(value ?? "").replaceAll('"', '""')}"`;
 
-        if (reportType === "standings") {
+        if (reportType === "player-history") {
+            headers = ["Player", "Competition", "Year", "Format", "Club", "Team", "Position", "Played", "Wins", "Draws", "Losses", "Win Rate"];
+            rows = selectedPlayerHistory.map(row => [
+                getPlayerLabel(row.player),
+                row.competition.name,
+                row.year,
+                row.competition.format || "",
+                row.clubName,
+                row.teamName,
+                row.position,
+                row.played,
+                row.wins,
+                row.draws,
+                row.losses,
+                `${row.winRate}%`
+            ]);
+        } else if (reportType === "standings") {
             headers = ["Position", "Team", "Club", "Played", "Wins", "Draws", "Losses", "Skins", "Points", "Shots For", "Shots Against", "Aggregate"];
             rows = standings.map((row, index) => [index + 1, getTeamLabel(row.team, reportData?.teams), row.team.clubs?.name || "", row.played, row.wins, row.draws, row.losses, row.skinsWon, row.points, row.shotsFor, row.shotsAgainst, row.aggregate]);
         } else if (reportType === "results") {
@@ -455,7 +808,7 @@ function Reports() {
                     <p className="text-muted mb-0">Analyse completed competitions, results, players and clubs.</p>
                 </div>
 
-                {reportData && (
+                {(reportData || (reportType === "player-history" && selectedPlayerHistory.length > 0)) && (
                     <div className="d-flex gap-2">
                         <button type="button" className="btn btn-outline-secondary" onClick={() => window.print()}>
                             <i className="bi bi-printer me-2"></i>Print
@@ -482,7 +835,7 @@ function Reports() {
                     <div className="card border-0 shadow-sm mb-4 report-controls">
                         <div className="card-body">
                             <div className="row g-3 align-items-end">
-                                <div className="col-12 col-lg-7">
+                                {reportType !== "player-history" && <div className="col-12 col-lg-7">
                                     <label className="form-label fw-semibold">Competition</label>
                                     <select
                                         className="form-select"
@@ -495,8 +848,8 @@ function Reports() {
                                             </option>
                                         ))}
                                     </select>
-                                </div>
-                                <div className="col-12 col-lg-5">
+                                </div>}
+                                <div className={reportType === "player-history" ? "col-12" : "col-12 col-lg-5"}>
                                     <label className="form-label fw-semibold">Report</label>
                                     <select
                                         className="form-select"
@@ -526,7 +879,23 @@ function Reports() {
                         </div>
                     </div>
 
-                    {loadingReport ? (
+                    {reportType === "player-history" ? (
+                        loadingPlayerHistory ? (
+                            <LoadingState message="Loading player competition history..." compact />
+                        ) : playerHistoryData ? (
+                            <PlayerHistoryReport
+                                people={filteredPlayerHistoryPeople}
+                                allPeople={playerHistoryPeople}
+                                search={playerSearch}
+                                onSearch={setPlayerSearch}
+                                selectedPlayerId={selectedPlayerId}
+                                onSelectPlayer={setSelectedPlayerId}
+                                rows={selectedPlayerHistory}
+                                totals={selectedPlayerTotals}
+                                medals={selectedPlayerMedals}
+                            />
+                        ) : null
+                    ) : loadingReport ? (
                         <LoadingState message="Building report..." compact />
                     ) : reportData ? (
                         <>
@@ -556,6 +925,185 @@ function Reports() {
                 </>
             )}
         </div>
+    );
+}
+
+function PlayerHistoryReport({
+    people,
+    allPeople,
+    search,
+    onSearch,
+    selectedPlayerId,
+    onSelectPlayer,
+    rows,
+    totals,
+    medals
+}) {
+    const selectedPlayer = allPeople.find(player => player.id === selectedPlayerId);
+    const winRate = totals.played ? Math.round((totals.wins / totals.played) * 100) : 0;
+
+    return (
+        <>
+            <div className="card border-0 shadow-sm mb-4">
+                <div className="card-body">
+                    <div className="row g-3 align-items-end">
+                        <div className="col-12 col-lg-6">
+                            <label className="form-label fw-semibold">Find player</label>
+                            <input
+                                className="form-control"
+                                type="search"
+                                placeholder="Search by player name..."
+                                value={search}
+                                onChange={event => onSearch(event.target.value)}
+                            />
+                        </div>
+                        <div className="col-12 col-lg-6">
+                            <label className="form-label fw-semibold">Select player</label>
+                            <select
+                                className="form-select"
+                                value={selectedPlayerId}
+                                onChange={event => onSelectPlayer(event.target.value)}
+                            >
+                                <option value="">Choose a player</option>
+                                {people.map(player => (
+                                    <option key={player.id} value={player.id}>{getPlayerLabel(player)}</option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+                    <div className="small text-muted mt-2">
+                        Player history includes participation and completed match results across all competitions.
+                    </div>
+                </div>
+            </div>
+
+            {!selectedPlayerId ? (
+                <div className="card border-0 shadow-sm">
+                    <div className="card-body text-center py-5">
+                        <i className="bi bi-person-lines-fill display-4 text-muted"></i>
+                        <h4 className="mt-3">Select a player</h4>
+                        <p className="text-muted mb-0">
+                            {allPeople.length
+                                ? `${allPeople.length} player(s) found across the available competitions.`
+                                : "No player competition records were found."}
+                        </p>
+                    </div>
+                </div>
+            ) : (
+                <>
+                    <div className="card border-0 shadow-sm mb-4">
+                        <div className="card-body">
+                            <h2 className="h4 mb-3">{getPlayerLabel(selectedPlayer)}</h2>
+                            <div className="row g-3">
+                                {[
+                                    ["Competitions", totals.competitions],
+                                    ["Games Played", totals.played],
+                                    ["Wins", totals.wins],
+                                    ["Draws", totals.draws],
+                                    ["Losses", totals.losses],
+                                    ["Win Rate", `${winRate}%`]
+                                ].map(([label, value]) => (
+                                    <div className="col-6 col-md-4 col-xl-2" key={label}>
+                                        <div className="border rounded p-3 h-100">
+                                            <div className="fs-4 fw-bold">{value}</div>
+                                            <div className="small text-muted">{label}</div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    <ReportTable title="Competition History" icon="person-lines-fill">
+                        <table className="table table-hover align-middle mb-0">
+                            <thead className="table-light">
+                                <tr>
+                                    <th>Competition</th>
+                                    <th>Year</th>
+                                    <th>Format</th>
+                                    <th>Club</th>
+                                    <th>Team</th>
+                                    <th>Position</th>
+                                    <th className="text-center">Played</th>
+                                    <th className="text-center">W</th>
+                                    <th className="text-center">D</th>
+                                    <th className="text-center">L</th>
+                                    <th className="text-center">Win %</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {rows.length ? rows.map(row => (
+                                    <tr key={row.key}>
+                                        <td className="fw-semibold">{row.competition.name}</td>
+                                        <td>{row.year}</td>
+                                        <td>{labelValue(row.competition.format)}</td>
+                                        <td>{row.clubName}</td>
+                                        <td>{row.teamName}</td>
+                                        <td>{labelValue(row.position)}</td>
+                                        <td className="text-center">{row.played}</td>
+                                        <td className="text-center text-success fw-semibold">{row.wins}</td>
+                                        <td className="text-center">{row.draws}</td>
+                                        <td className="text-center text-danger fw-semibold">{row.losses}</td>
+                                        <td className="text-center fw-semibold">{row.winRate}%</td>
+                                    </tr>
+                                )) : (
+                                    <tr><td colSpan="11" className="text-center text-muted py-4">No competition history found for this player.</td></tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </ReportTable>
+
+                    <div className="card border-0 shadow-sm mt-4">
+                        <div className="card-header bg-white">
+                            <strong><i className="bi bi-award-fill me-2"></i>Top 3 Medals Achieved</strong>
+                            <div className="small text-muted mt-1">
+                                Gold, Silver and shared Bronze awards from completed competitions.
+                            </div>
+                        </div>
+                        <div className="card-body p-0">
+                            {medals.length ? (
+                                <div className="table-responsive">
+                                    <table className="table table-hover align-middle mb-0">
+                                        <thead className="table-light">
+                                            <tr>
+                                                <th>Medal</th>
+                                                <th>Competition</th>
+                                                <th>Year</th>
+                                                <th>Club</th>
+                                                <th>Team</th>
+                                                <th>Playing Position</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {medals.map(item => (
+                                                <tr key={item.key}>
+                                                    <td>
+                                                        <span className={`badge ${
+                                                            item.medal === "Gold" ? "bg-warning text-dark" :
+                                                            item.medal === "Silver" ? "bg-secondary" :
+                                                            "bg-danger"
+                                                        }`}>{item.medal}</span>
+                                                    </td>
+                                                    <td className="fw-semibold">{item.competition.name}</td>
+                                                    <td>{item.year}</td>
+                                                    <td>{item.clubName}</td>
+                                                    <td>{item.teamName}</td>
+                                                    <td>{labelValue(item.position)}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            ) : (
+                                <div className="text-center text-muted py-4">
+                                    No Gold, Silver or Bronze medals recorded for this player yet.
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </>
+            )}
+        </>
     );
 }
 

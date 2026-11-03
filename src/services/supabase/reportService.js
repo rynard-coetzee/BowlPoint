@@ -111,3 +111,57 @@ export async function getCompetitionReportData(competitionId) {
         teamPlayers
     };
 }
+
+/**
+ * Load player participation and completed-match results across the supplied
+ * competitions. This is intentionally read-only and uses the same persisted
+ * team roster and match results as the competition reports.
+ */
+export async function getPlayerHistoryReportData(competitionIds) {
+    const ids = [...new Set((competitionIds || []).filter(Boolean))];
+    if (!ids.length) return { teams: [], matches: [], rounds: [], teamPlayers: [] };
+
+    const [teamsResult, matchesResult, roundsResult] = await Promise.all([
+        supabase
+            .from("competition_teams")
+            .select("id, competition_id, club_id, team_number, team_name, status, clubs (id, name, short_name)")
+            .in("competition_id", ids)
+            .order("team_number"),
+
+        supabase
+            .from("competition_matches")
+            .select("id, competition_id, round_id, match_number, team_a_id, team_b_id, score_a, score_b, shots_for_a, shots_for_b, completed, completed_at")
+            .in("competition_id", ids)
+            .eq("completed", true)
+            .order("match_number"),
+
+        supabase
+            .from("competition_rounds")
+            .select("id, competition_id, round_number, round_name, competition_day_id, competition_days (id, playing_date, name)")
+            .in("competition_id", ids)
+            .order("round_number")
+    ]);
+
+    if (teamsResult.error) throw teamsResult.error;
+    if (matchesResult.error) throw matchesResult.error;
+    if (roundsResult.error) throw roundsResult.error;
+
+    const teams = teamsResult.data || [];
+    let teamPlayers = [];
+    if (teams.length) {
+        const { data, error } = await supabase
+            .from("competition_team_players")
+            .select("id, competition_team_id, player_id, position, position_order, players (id, first_name, nickname, last_name, display_name)")
+            .in("competition_team_id", teams.map(team => team.id));
+        if (error) throw error;
+        teamPlayers = data || [];
+    }
+
+    return {
+        teams,
+        matches: matchesResult.data || [],
+        rounds: roundsResult.data || [],
+        teamPlayers
+    };
+}
+
