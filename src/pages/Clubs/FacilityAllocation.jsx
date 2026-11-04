@@ -13,12 +13,6 @@ const SESSIONS = [
 const localIso = (date, time) => new Date(`${date}T${time}+02:00`).toISOString();
 const keyFor = (roundId, matchId) => `${roundId}:${matchId}`;
 const overlaps = (aStart, aEnd, bStart, bEnd) => new Date(aStart) < new Date(bEnd) && new Date(bStart) < new Date(aEnd);
-// Normalize UUIDs before comparing booking ownership. A competition's own
-// previously saved bookings must not reduce capacity when it reallocates.
-const sameId = (left, right) =>
-  String(left ?? "").trim().toLowerCase() === String(right ?? "").trim().toLowerCase();
-const isExternalBooking = (booking, currentCompetitionId) =>
-  !sameId(booking.competition_id, currentCompetitionId);
 
 export default function FacilityAllocation() {
   const { competitionId } = useParams();
@@ -246,7 +240,7 @@ export default function FacilityAllocation() {
       if (direction === 2 && !green.allows_direction_change) return 0;
 
       const external = bookings.filter(booking =>
-        isExternalBooking(booking, competitionId) &&
+        booking.competition_id !== competitionId &&
         booking.status !== "cancelled" &&
         booking.green_id === green.id &&
         overlaps(startsAt, endsAt, booking.starts_at, booking.ends_at)
@@ -409,7 +403,7 @@ export default function FacilityAllocation() {
           let capacity = 0;
           for (const green of usableGreens) {
             for (const rink of green.rinks) {
-              const occupied = bookings.some(b => isExternalBooking(b, competitionId) && b.status !== "cancelled" &&
+              const occupied = bookings.some(b => b.competition_id !== competitionId && b.status !== "cancelled" &&
                 b.green_id === green.id && overlaps(slot.start, slot.end, b.starts_at, b.ends_at) &&
                 (Number(b.direction) !== slot.direction || b.rink_id === rink.id));
               if (!occupied) capacity += 1;
@@ -556,7 +550,7 @@ export default function FacilityAllocation() {
             const clubGreens = greens.filter(green => green.club_id === clubId && green.active && green.rinks.length);
             const greenDetails = clubGreens.map(green => {
               const external = bookings.filter(booking =>
-                isExternalBooking(booking, competitionId) && booking.status !== "cancelled" &&
+                booking.competition_id !== competitionId && booking.status !== "cancelled" &&
                 booking.green_id === green.id && overlaps(slot.start, slot.end, booking.starts_at, booking.ends_at)
               );
               const wrongDirection = external.some(booking => Number(booking.direction) !== slot.direction);
@@ -624,7 +618,7 @@ export default function FacilityAllocation() {
       const green = greens.find(item => item.id === greenId);
       const usableRinks = green && (Number(direction) !== 2 || green.allows_direction_change)
         ? green.rinks.filter(rink => !bookings.some(b =>
-            isExternalBooking(b, competitionId) &&
+            b.competition_id !== competitionId &&
             b.status !== "cancelled" &&
             b.green_id === green.id &&
             overlaps(start, end, b.starts_at, b.ends_at) &&
@@ -718,7 +712,7 @@ export default function FacilityAllocation() {
         await saveSectionVenues(sectionVenueIds, sectionGreenMap);
         setSectionGreenIds(sectionGreenMap);
       }
-      const externalBookings = bookings.filter(b => b.status !== "cancelled" && isExternalBooking(b, competitionId));
+      const externalBookings = bookings.filter(b => b.status !== "cancelled" && b.competition_id !== competitionId);
       const teamRinkHistory = new Map();
       const planned = [];
       for (const row of rows) {

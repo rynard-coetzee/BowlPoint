@@ -316,7 +316,8 @@ function buildPlayoffHtml(rounds, matches, playingDays) {
 export function exportCompetitionFixturesPdf({
     competition,
     confirmedDraw,
-    playingDays = []
+    playingDays = [],
+    includeRinkAllocations = true
 }) {
     if (!competition || !confirmedDraw) return;
 
@@ -371,7 +372,7 @@ export function exportCompetitionFixturesPdf({
         const label = [clubLabel, greenLabel, rinkLabel].filter(Boolean).join(" / ");
         return label || "—";
     };
-    const getSchedule = (round, section = null) => {
+    const getSchedule = (round, section = null, includeRinkAllocations = true) => {
         const day = playingDays.find(item => item.id === round.competition_day_id) || round.competition_days || {};
         const date = day.playing_date
             ? new Date(`${day.playing_date}T00:00:00`).toLocaleDateString("en-ZA", { day: "2-digit", month: "2-digit", year: "numeric" })
@@ -379,17 +380,30 @@ export function exportCompetitionFixturesPdf({
         const session = day.name || day.day_name || "";
         // Facility allocation is the authoritative venue once greens have been
         // assigned. A round can span several clubs, so list all allocated host clubs.
-        const allocatedClubs = [...new Set(matches
-            .filter(match => match.round_id === round.id && (!section || match.section_id === section.id || match.section?.id === section.id))
+        const roundMatches = matches.filter(match =>
+            match.round_id === round.id &&
+            (!section || match.section_id === section.id || match.section?.id === section.id)
+        );
+        const allocatedClubs = [...new Set(roundMatches
             .map(match => {
                 const booking = match.facility_booking || match.facilityBooking || match.booking || {};
                 const green = booking.green || match.green || match.club_green || {};
                 return green.clubs?.short_name || green.clubs?.name || "";
             })
             .filter(Boolean))];
-        const venue = allocatedClubs.length
+        // Sectional venue is saved separately from rink bookings. This keeps
+        // the host club visible in the no-rinks PDF as well. Playoff rounds
+        // (which have no section) continue to use their scheduled day venue.
+        const assignedSectionVenues = [...new Set(roundMatches
+            .map(match => match.section_venue?.short_name || match.section_venue?.name || "")
+            .filter(Boolean))];
+        const scheduledVenue =
+            day.clubs?.short_name || day.clubs?.name || day.venue_name || "";
+        const venue = includeRinkAllocations && allocatedClubs.length
             ? allocatedClubs.join(", ")
-            : (day.clubs?.short_name || day.clubs?.name || day.venue_name || "");
+            : assignedSectionVenues.length
+                ? assignedSectionVenues.join(", ")
+                : scheduledVenue;
         return { date, session, venue };
     };
 
@@ -404,7 +418,7 @@ export function exportCompetitionFixturesPdf({
         if (!sectionTeams.length) return "";
 
         const scheduleRows = sectionRounds.map(round => {
-            const schedule = getSchedule(round, section);
+            const schedule = getSchedule(round, section, includeRinkAllocations);
             return `<tr>
                 <td>R${escapeHtml(round.round_number)}</td>
                 <td>${escapeHtml(schedule.date || "Date TBC")}${schedule.session ? ` ${escapeHtml(schedule.session)}` : ""}</td>
@@ -415,7 +429,7 @@ export function exportCompetitionFixturesPdf({
         const teamCards = sectionTeams.map((team, teamIndex) => {
             const gameRows = sectionRounds.map(round => {
                 const match = matchForTeamRound(team, round, section);
-                if (!match) return `<tr><td>${escapeHtml(round.round_number)}</td><td>—</td><td>—</td>`;
+                if (!match) return `<tr><td>${escapeHtml(round.round_number)}</td><td>—</td>${includeRinkAllocations ? "<td>—</td>" : ""}</tr>`;
                 const isA = match.team_a_id === team.id;
                 const opponentId = isA ? match.team_b_id : match.team_a_id;
                 const opponent = isA ? match.teamB : match.teamA;
@@ -423,7 +437,7 @@ export function exportCompetitionFixturesPdf({
                 return `<tr>
                     <td>${escapeHtml(round.round_number)}</td>
                     <td>${escapeHtml(isBye ? "BYE" : teamLabel(opponent))}</td>
-                    <td>${escapeHtml(isBye ? "—" : getRinkLabel(match))}</td>
+                    ${includeRinkAllocations ? `<td>${escapeHtml(isBye ? "—" : getRinkLabel(match))}</td>` : ""}
                 </tr>`;
             }).join("");
             const members = getTeamMembers(team);
@@ -436,9 +450,12 @@ export function exportCompetitionFixturesPdf({
                 <div class="team-title">${escapeHtml(teamTitle)}</div>
                 <div class="team-club">${escapeHtml(club)}</div>
                 <table class="games">
-                    <thead><tr><th>Rnd</th><th>Opposition</th><th>Rink</th></tr></thead>
+                    <thead><tr><th>Rnd</th><th>Opposition</th>${includeRinkAllocations ? "<th>Rink</th>" : ""}</tr></thead>
                     <tbody>${gameRows}</tbody>
-                    <tfoot><tr><td colspan="2">Total</td><td>—</td></tr><tr><td colspan="2">Aggregate</td><td>0</td></tr></tfoot>
+                    <tfoot>${includeRinkAllocations
+                        ? '<tr><td colspan="2">Total</td><td>—</td></tr><tr><td colspan="2">Aggregate</td><td>0</td></tr>'
+                        : '<tr><td>Total</td><td>—</td></tr><tr><td>Aggregate</td><td>0</td></tr>'
+                    }</tfoot>
                 </table>
             </article>`;
         }).join("");
@@ -454,6 +471,7 @@ export function exportCompetitionFixturesPdf({
     }).join("");
 
     const title = escapeHtml(competition.name || "BowlPoint Competition");
+    const exportLabel = includeRinkAllocations ? "Draw with Rink Allocations" : "Draw without Rink Allocations";
     const generatedDate = new Date().toLocaleDateString("en-ZA", { day: "2-digit", month: "long", year: "numeric" });
     const printWindow = window.open("", "_blank", "width=1400,height=900");
     if (!printWindow) {
@@ -462,7 +480,7 @@ export function exportCompetitionFixturesPdf({
     }
 
     printWindow.document.write(`<!doctype html>
-<html><head><meta charset="utf-8"><title>${title} - Draw</title>
+<html><head><meta charset="utf-8"><title>${title} - ${escapeHtml(exportLabel)}</title>
 <style>
 @page { size: A4 landscape; margin: 8mm; }
 * { box-sizing: border-box; }
@@ -492,7 +510,7 @@ header .subtitle { border:1px solid #111; padding:6px; font-size:11px; }
 .games tfoot tr:first-child td:last-child { background:#f00; }
 @media print { .section { break-inside:avoid; } }
 </style></head><body>
-<header><h1>DISTRICT COMPETITIONS</h1><h2>${title}</h2><div class="subtitle">Competition Draw and Playing Schedule</div></header>
+<header><h1>DISTRICT COMPETITIONS</h1><h2>${title}</h2><div class="subtitle">Competition ${escapeHtml(exportLabel)} and Playing Schedule</div></header>
 ${sectionHtml || `<p>No sectional team blocks are available for this draw.</p>`}
 <footer style="margin-top:8px;font-size:8px;display:flex;justify-content:space-between"><span>${title} · Draw</span><span>Generated ${escapeHtml(generatedDate)}</span></footer>
 <script>window.onload=function(){window.focus();window.print();};</script>

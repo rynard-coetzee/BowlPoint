@@ -521,11 +521,24 @@ function CompetitionWorkspace() {
                             return {
                                 ...fullTeam,
                                 ...(sectionTeam || {}),
+                                // Keep the join-table row identity separately from
+                                // the competition team ID. Section membership edits
+                                // must target competition_section_teams.id, not
+                                // competition_teams.id.
+                                id: fullTeam.id,
+                                competition_team_id: row.competition_team_id,
+                                section_id: row.section_id,
+                                section_team_id: row.id,
                                 competition_team_players: fullTeam.competition_team_players || []
                             };
                         }
 
-                        return sectionTeam || null;
+                        return sectionTeam ? {
+                            ...sectionTeam,
+                            competition_team_id: row.competition_team_id,
+                            section_id: row.section_id,
+                            section_team_id: row.id
+                        } : null;
                     })
                     .filter(Boolean),
                 matches: persistedMatches
@@ -639,7 +652,7 @@ function CompetitionWorkspace() {
         // navigation.
         const initialStage = !confirmedDraw ? "teams" : workspaceStage;
         const timer = setTimeout(() => focusWorkspaceStage(initialStage), 120);
-        return () => clearTimeout(timer);
+    return () => clearTimeout(timer);
     }, [loading, competition, confirmedDraw, workspaceStage]);
 
     useEffect(() => {
@@ -2602,13 +2615,18 @@ function CompetitionWorkspace() {
         setSectionManagerMessage("");
 
         const oldMemberships = [
-            { id: entryA.id, section_id: sectionA.id },
-            { id: entryB.id, section_id: sectionB.id }
+            { id: entryA.section_team_id, section_id: sectionA.id },
+            { id: entryB.section_team_id, section_id: sectionB.id }
         ];
         const newMemberships = [
-            { id: entryA.id, section_id: sectionB.id },
-            { id: entryB.id, section_id: sectionA.id }
+            { id: entryA.section_team_id, section_id: sectionB.id },
+            { id: entryB.section_team_id, section_id: sectionA.id }
         ];
+        if (!oldMemberships.every(row => row.id)) {
+            alert("The saved section membership IDs could not be identified. Refresh the draw and try again.");
+            setSavingSectionSwap(false);
+            return;
+        }
         const originalFixtureRows = [];
         const fixtureUpdates = [];
 
@@ -2626,8 +2644,8 @@ function CompetitionWorkspace() {
             };
 
             const nextSectionTeams = new Map([
-                [sectionA.id, sectionA.teams.map(entry => entry === entryA ? entryB : entry).map(toDrawTeam)],
-                [sectionB.id, sectionB.teams.map(entry => entry === entryB ? entryA : entry).map(toDrawTeam)]
+                [sectionA.id, sectionA.teams.map(entry => entry.section_team_id === entryA.section_team_id ? entryB : entry).map(toDrawTeam)],
+                [sectionB.id, sectionB.teams.map(entry => entry.section_team_id === entryB.section_team_id ? entryA : entry).map(toDrawTeam)]
             ]);
 
             for (const section of [sectionA, sectionB]) {
@@ -2671,22 +2689,70 @@ function CompetitionWorkspace() {
             // rows in place. Keeping fixture IDs preserves their saved dates and
             // facility-booking links; only the participating teams are regenerated.
             for (const membership of newMemberships) {
-                const { error } = await supabase
+                const { data, error } = await supabase
                     .from("competition_section_teams")
                     .update({ section_id: membership.section_id })
-                    .eq("id", membership.id);
+                    .eq("id", membership.id)
+                    .select("id")
+                    .maybeSingle();
+
                 if (error) throw error;
+                if (!data?.id) {
+                    throw new Error(
+                        `BowlPoint could not update section membership ${membership.id}. ` +
+                        "The database may be blocking this update through Row Level Security."
+                    );
+                }
             }
 
             for (const fixture of fixtureUpdates) {
-                const { error } = await supabase
+                const { data, error } = await supabase
                     .from("competition_matches")
                     .update({
                         team_a_id: fixture.team_a_id,
                         team_b_id: fixture.team_b_id
                     })
-                    .eq("id", fixture.id);
+                    .eq("id", fixture.id)
+                    .eq("competition_id", competitionId)
+                    .select("id")
+                    .maybeSingle();
+
                 if (error) throw error;
+                if (!data?.id) {
+                    throw new Error(
+                        `BowlPoint could not update sectional fixture ${fixture.id}. ` +
+                        "The database returned no updated row. Check the competition_matches UPDATE policy in Supabase Row Level Security."
+                    );
+                }
+            }
+
+            // Read the changed fixture rows back before reporting success. This
+            // catches cases where a request appeared to complete but the saved
+            // team IDs did not actually change.
+            const updatedFixtureIds = fixtureUpdates.map(row => row.id);
+            if (updatedFixtureIds.length) {
+                const { data: verifiedRows, error: verifyError } = await supabase
+                    .from("competition_matches")
+                    .select("id, team_a_id, team_b_id")
+                    .eq("competition_id", competitionId)
+                    .in("id", updatedFixtureIds);
+
+                if (verifyError) throw verifyError;
+
+                const verifiedById = new Map((verifiedRows || []).map(row => [row.id, row]));
+                const mismatch = fixtureUpdates.find(expected => {
+                    const actual = verifiedById.get(expected.id);
+                    return !actual ||
+                        actual.team_a_id !== expected.team_a_id ||
+                        actual.team_b_id !== expected.team_b_id;
+                });
+
+                if (mismatch) {
+                    throw new Error(
+                        `Fixture ${mismatch.id} did not save the expected teams. ` +
+                        "The database may be preventing fixture updates."
+                    );
+                }
             }
 
             await loadData();
@@ -3539,6 +3605,94 @@ function CompetitionWorkspace() {
     const playerSelectionPositions = [...positions].sort(
         (a, b) => b.order - a.order
     );
+
+    const handleExportDrawPdf = async (includeRinkAllocations) => {
+        try {
+            let exportDraw = confirmedDraw;
+
+            // Venue assignments are independent of rink allocations. Load the
+            // approved section host clubs for BOTH PDF versions so the no-rinks
+            // export still shows where each sectional round is being played.
+            const { data: sectionVenueRows, error: sectionVenuesError } = await supabase
+                .from("competition_section_venues")
+                .select("section_id,club_id,clubs(id,name,short_name)")
+                .eq("competition_id", competitionId);
+            if (sectionVenuesError) throw sectionVenuesError;
+
+            const sectionVenueById = new Map(
+                (sectionVenueRows || []).map(row => [String(row.section_id), row.clubs || null])
+            );
+
+            exportDraw = {
+                ...confirmedDraw,
+                matches: (confirmedDraw.matches || []).map(match => ({
+                    ...match,
+                    section_venue: match.section_id
+                        ? sectionVenueById.get(String(match.section_id)) || null
+                        : null
+                }))
+            };
+
+            if (includeRinkAllocations) {
+                // Only fetch facility data when the user requests the allocated version.
+                const { data: bookings, error: bookingsError } = await supabase
+                    .from("facility_bookings")
+                    .select("match_id,competition_id,green_id,rink_id,playing_date,session_name,direction,status")
+                    .eq("competition_id", competitionId)
+                    .neq("status", "cancelled");
+                if (bookingsError) throw bookingsError;
+
+                const activeBookings = bookings || [];
+                const greenIds = [...new Set(activeBookings.map(item => item.green_id).filter(Boolean))];
+                const rinkIds = [...new Set(activeBookings.map(item => item.rink_id).filter(Boolean))];
+                const [greensResult, rinksResult] = await Promise.all([
+                    greenIds.length
+                        ? supabase.from("club_greens").select("id,name,club_id,clubs(id,short_name,name)").in("id", greenIds)
+                        : Promise.resolve({ data: [], error: null }),
+                    rinkIds.length
+                        ? supabase.from("green_rinks").select("id,green_id,label").in("id", rinkIds)
+                        : Promise.resolve({ data: [], error: null })
+                ]);
+                if (greensResult.error) throw greensResult.error;
+                if (rinksResult.error) throw rinksResult.error;
+
+                const greenById = new Map((greensResult.data || []).map(item => [String(item.id), item]));
+                const rinkById = new Map((rinksResult.data || []).map(item => [String(item.id), item]));
+                const bookingByMatchId = new Map(activeBookings.map(item => [String(item.match_id), item]));
+
+                exportDraw = {
+                    ...confirmedDraw,
+                    matches: (confirmedDraw.matches || []).map(match => {
+                        const booking = bookingByMatchId.get(String(match.id));
+                        if (!booking) return match;
+                        const green = greenById.get(String(booking.green_id)) || null;
+                        const rink = rinkById.get(String(booking.rink_id)) || null;
+                        return {
+                            ...match,
+                            facility_booking: {
+                                ...booking,
+                                green,
+                                rink,
+                                rink_label: rink?.label || rink?.name || "",
+                                green_label: green?.name || "",
+                                club: green?.clubs || null
+                            }
+                        };
+                    })
+                };
+            }
+
+            exportCompetitionFixturesPdf({
+                competition,
+                confirmedDraw: exportDraw,
+                playingDays,
+                includeRinkAllocations
+            });
+        } catch (error) {
+            console.error("Download Draw PDF failed:", error);
+            window.alert(`Unable to download the draw PDF: ${error?.message || "An unexpected error occurred."}`);
+        }
+    };
 
     return (
         <>
@@ -5550,65 +5704,20 @@ function CompetitionWorkspace() {
                             <button
                                 type="button"
                                 className="btn btn-outline-primary btn-sm"
-                                onClick={async () => {
-                                    try {
-                                    // Keep the booking query to base-table columns. A nested
-                                    // green_rinks relationship here is not reliable across the
-                                    // deployed schema versions; if PostgREST rejects it, the old
-                                    // code silently exported no bookings and every rink became —.
-                                    const { data: bookings, error: bookingsError } = await supabase
-                                        .from("facility_bookings")
-                                        .select("match_id,competition_id,green_id,rink_id,playing_date,session_name,direction,status")
-                                        .eq("competition_id", competitionId)
-                                        .neq("status", "cancelled");
-                                    if (bookingsError) throw bookingsError;
-                                    const activeBookings = bookings || [];
-                                    const greenIds = [...new Set(activeBookings.map(item => item.green_id).filter(Boolean))];
-                                    const rinkIds = [...new Set(activeBookings.map(item => item.rink_id).filter(Boolean))];
-                                    const [{ data: greens, error: greensError }, { data: rinks, error: rinksError }] = await Promise.all([
-                                        greenIds.length
-                                            ? supabase.from("club_greens").select("id,name,club_id,clubs(id,short_name,name)").in("id", greenIds)
-                                            : Promise.resolve({ data: [], error: null }),
-                                        rinkIds.length
-                                            ? supabase.from("green_rinks").select("id,green_id,label").in("id", rinkIds)
-                                            : Promise.resolve({ data: [], error: null })
-                                    ]);
-                                    if (greensError) throw greensError;
-                                    if (rinksError) throw rinksError;
-                                    const greenById = new Map((greens || []).map(item => [String(item.id), item]));
-                                    const rinkById = new Map((rinks || []).map(item => [String(item.id), item]));
-                                    const bookingByMatchId = new Map(activeBookings.map(item => [String(item.match_id), item]));
-                                    const exportDraw = {
-                                        ...confirmedDraw,
-                                        matches: (confirmedDraw.matches || []).map(match => {
-                                            const booking = bookingByMatchId.get(String(match.id));
-                                            if (!booking) return match;
-                                            const green = greenById.get(String(booking.green_id)) || null;
-                                            const rink = rinkById.get(String(booking.rink_id)) || null;
-                                            return {
-                                                ...match,
-                                                facility_booking: {
-                                                    ...booking,
-                                                    green,
-                                                    rink,
-                                                    rink_label: rink?.label || rink?.name || "",
-                                                    // Retain explicit labels as a final fallback if a
-                                                    // legacy booking has no resolvable rink foreign key.
-                                                    green_label: green?.name || "",
-                                                    club: green?.clubs || null
-                                                }
-                                            };
-                                        })
-                                    };
-                                    exportCompetitionFixturesPdf({ competition, confirmedDraw: exportDraw, playingDays });
-                                    } catch (error) {
-                                        console.error("Download Draw PDF failed:", error);
-                                        window.alert(`Unable to download the draw PDF: ${error?.message || "An unexpected error occurred."}`);
-                                    }
-                                }}
+                                onClick={() => handleExportDrawPdf(false)}
+                                title="Export the draw without rink allocation details"
                             >
                                 <i className="bi bi-file-earmark-pdf me-2"></i>
-                                Download Draw PDF
+                                Draw PDF (No Rinks)
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                onClick={() => handleExportDrawPdf(true)}
+                                title="Export the draw including allocated clubs, greens and rinks"
+                            >
+                                <i className="bi bi-file-earmark-pdf me-2"></i>
+                                Draw PDF (With Rinks)
                             </button>
                             <span className={`badge ${confirmedDraw.rounds.length && confirmedDraw.rounds.every(round => round.competition_day_id) ? "bg-success" : "bg-secondary"}`}>
                             {confirmedDraw.rounds.length && confirmedDraw.rounds.every(round => round.competition_day_id)
