@@ -213,7 +213,7 @@ function buildSectionTable(section, rounds, matches, playingDays) {
             const bye = isByeForTeam(team.id, round.id, teamMatches, sectionTeamIds);
 
             return `
-                <td class="opp-cell">${bye ? "BYE" : escapeHtml(opponent || "")}</td>
+                <td class="opp-cell${bye && byeLabel === "MARK" ? " mark-cell" : ""}">${bye ? byeLabel : escapeHtml(opponent || "")}</td>
                 <td class="rink-cell">&nbsp;</td>
             `;
         }).join("");
@@ -319,6 +319,8 @@ export function exportCompetitionFixturesPdf({
     playingDays = [],
     includeRinkAllocations = true
 }) {
+    const byeLabel = String(competition?.format || "").toLowerCase() === "singles" ? "MARK" : "BYE";
+
     if (!competition || !confirmedDraw) return;
 
     const rounds = [...(confirmedDraw.rounds || [])]
@@ -351,7 +353,7 @@ export function exportCompetitionFixturesPdf({
         clubTeams.forEach((team, index) => clubTeamNumbers.set(team.id, index + 1));
     });
     const teamLabel = team => {
-        if (!team) return "BYE";
+        if (!team) return byeLabel;
         const club = getTeamClub(team);
         const localNumber = clubTeamNumbers.get(team.id);
         return club && localNumber ? `${club}${localNumber}` : (team.team_name || team.name || "Team");
@@ -429,14 +431,38 @@ export function exportCompetitionFixturesPdf({
         const teamCards = sectionTeams.map((team, teamIndex) => {
             const gameRows = sectionRounds.map(round => {
                 const match = matchForTeamRound(team, round, section);
-                if (!match) return `<tr><td>${escapeHtml(round.round_number)}</td><td>—</td>${includeRinkAllocations ? "<td>—</td>" : ""}</tr>`;
+                if (!match) {
+                    // Odd-sized Singles sections do not necessarily persist a
+                    // placeholder match for the player sitting out that round.
+                    // The in-app draw derives the bye from section membership,
+                    // so mirror that logic in the PDF export.
+                    const roundSectionMatches = matches.filter(item =>
+                        item.round_id === round.id &&
+                        (item.section_id === section.id || item.section?.id === section.id)
+                    );
+                    const playingTeamIds = new Set(
+                        roundSectionMatches.flatMap(item =>
+                            [item.team_a_id, item.team_b_id].filter(Boolean)
+                        )
+                    );
+                    const isUnmatchedSinglesBye =
+                        byeLabel === "MARK" &&
+                        roundSectionMatches.length > 0 &&
+                        !playingTeamIds.has(team.id);
+
+                    return `<tr>
+                        <td>${escapeHtml(round.round_number)}</td>
+                        <td class="${isUnmatchedSinglesBye ? "mark-cell" : ""}">${isUnmatchedSinglesBye ? "MARK" : "—"}</td>
+                        ${includeRinkAllocations ? "<td>—</td>" : ""}
+                    </tr>`;
+                }
                 const isA = match.team_a_id === team.id;
                 const opponentId = isA ? match.team_b_id : match.team_a_id;
                 const opponent = isA ? match.teamB : match.teamA;
                 const isBye = !opponentId || !opponent;
                 return `<tr>
                     <td>${escapeHtml(round.round_number)}</td>
-                    <td>${escapeHtml(isBye ? "BYE" : teamLabel(opponent))}</td>
+                    <td class="${isBye && byeLabel === "MARK" ? "mark-cell" : ""}">${escapeHtml(isBye ? byeLabel : teamLabel(opponent))}</td>
                     ${includeRinkAllocations ? `<td>${escapeHtml(isBye ? "—" : getRinkLabel(match))}</td>` : ""}
                 </tr>`;
             }).join("");
@@ -503,6 +529,7 @@ header .subtitle { border:1px solid #111; padding:6px; font-size:11px; }
 .games { width:100%; border-collapse:collapse; table-layout:fixed; }
 .games th,.games td { border:1px solid #111; text-align:center; padding:3px 2px; height:20px; overflow-wrap:anywhere; }
 .games th { font-weight:400; background:#eee; }
+.mark-cell { background:#fff2cc !important; font-weight:700; }
 .games th:first-child,.games td:first-child { width:13%; }
 .games th:nth-child(2),.games td:nth-child(2) { width:52%; }
 .games th:last-child,.games td:last-child { width:35%; }

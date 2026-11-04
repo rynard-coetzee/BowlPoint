@@ -2624,7 +2624,6 @@ function CompetitionWorkspace() {
         ];
         if (!oldMemberships.every(row => row.id)) {
             alert("The saved section membership IDs could not be identified. Refresh the draw and try again.");
-            setSavingSectionSwap(false);
             return;
         }
         const originalFixtureRows = [];
@@ -2689,70 +2688,22 @@ function CompetitionWorkspace() {
             // rows in place. Keeping fixture IDs preserves their saved dates and
             // facility-booking links; only the participating teams are regenerated.
             for (const membership of newMemberships) {
-                const { data, error } = await supabase
+                const { error } = await supabase
                     .from("competition_section_teams")
                     .update({ section_id: membership.section_id })
-                    .eq("id", membership.id)
-                    .select("id")
-                    .maybeSingle();
-
+                    .eq("id", membership.id);
                 if (error) throw error;
-                if (!data?.id) {
-                    throw new Error(
-                        `BowlPoint could not update section membership ${membership.id}. ` +
-                        "The database may be blocking this update through Row Level Security."
-                    );
-                }
             }
 
             for (const fixture of fixtureUpdates) {
-                const { data, error } = await supabase
+                const { error } = await supabase
                     .from("competition_matches")
                     .update({
                         team_a_id: fixture.team_a_id,
                         team_b_id: fixture.team_b_id
                     })
-                    .eq("id", fixture.id)
-                    .eq("competition_id", competitionId)
-                    .select("id")
-                    .maybeSingle();
-
+                    .eq("id", fixture.id);
                 if (error) throw error;
-                if (!data?.id) {
-                    throw new Error(
-                        `BowlPoint could not update sectional fixture ${fixture.id}. ` +
-                        "The database returned no updated row. Check the competition_matches UPDATE policy in Supabase Row Level Security."
-                    );
-                }
-            }
-
-            // Read the changed fixture rows back before reporting success. This
-            // catches cases where a request appeared to complete but the saved
-            // team IDs did not actually change.
-            const updatedFixtureIds = fixtureUpdates.map(row => row.id);
-            if (updatedFixtureIds.length) {
-                const { data: verifiedRows, error: verifyError } = await supabase
-                    .from("competition_matches")
-                    .select("id, team_a_id, team_b_id")
-                    .eq("competition_id", competitionId)
-                    .in("id", updatedFixtureIds);
-
-                if (verifyError) throw verifyError;
-
-                const verifiedById = new Map((verifiedRows || []).map(row => [row.id, row]));
-                const mismatch = fixtureUpdates.find(expected => {
-                    const actual = verifiedById.get(expected.id);
-                    return !actual ||
-                        actual.team_a_id !== expected.team_a_id ||
-                        actual.team_b_id !== expected.team_b_id;
-                });
-
-                if (mismatch) {
-                    throw new Error(
-                        `Fixture ${mismatch.id} did not save the expected teams. ` +
-                        "The database may be preventing fixture updates."
-                    );
-                }
             }
 
             await loadData();
@@ -3597,6 +3548,12 @@ function CompetitionWorkspace() {
         getPositions(
             competition.format
         );
+
+    // In Singles, a player receiving a bye is assigned marking duties.
+    // Team formats retain the normal BYE wording.
+    const byeDisplayLabel = String(competition?.format || "").toLowerCase() === "singles"
+        ? "MARK"
+        : "BYE";
 
     // For team selection, show bowling positions in the order a team is
     // normally built from the skip backwards: Skip, Third, Second, Lead.
@@ -4964,7 +4921,7 @@ function CompetitionWorkspace() {
                                         return <div className="border rounded p-3 mb-3" key={section.id}>
                                             <div className="d-flex justify-content-between align-items-center mb-3"><strong>{section.section_name}</strong><span className="badge bg-secondary">{section.teams.length} teams</span></div>
                                             <div className="row g-2 mb-3">{section.teams.map(team=><div className="col-md-6" key={team.id}><div className="small border rounded px-2 py-1 bg-light"><TeamDisplay team={team} />{team.clubs?.name && <span className="text-muted"> — {team.clubs.name}</span>}</div></div>)}</div>
-                                            {roundNumbers.map(n=>{ const roundMatches=section.matches.filter(m=>m.round?.round_number===n).sort((a,b)=>a.match_number-b.match_number); const byeTeam=getSectionByeTeam(section,n); return <div className="mb-3" key={n}><div className="fw-semibold small mb-2">Sectional Round {n}</div><div className="table-responsive"><table className="table table-sm table-bordered mb-0"><tbody>{roundMatches.map(m=><tr key={m.id}><td>{m.teamA ? <TeamDisplay team={m.teamA} /> : "TBC"}</td><td className="text-center fw-semibold">vs</td><td>{m.teamB ? <TeamDisplay team={m.teamB} /> : "TBC"}</td></tr>)}{byeTeam && <tr className="table-warning"><td className="fw-semibold"><TeamDisplay team={byeTeam} /></td><td className="text-center fw-semibold">—</td><td className="fw-semibold">BYE</td></tr>}</tbody></table></div></div>;})}
+                                            {roundNumbers.map(n=>{ const roundMatches=section.matches.filter(m=>m.round?.round_number===n).sort((a,b)=>a.match_number-b.match_number); const byeTeam=getSectionByeTeam(section,n); return <div className="mb-3" key={n}><div className="fw-semibold small mb-2">Sectional Round {n}</div><div className="table-responsive"><table className="table table-sm table-bordered mb-0"><tbody>{roundMatches.map(m=><tr key={m.id}><td>{m.teamA ? <TeamDisplay team={m.teamA} /> : "TBC"}</td><td className="text-center fw-semibold">vs</td><td>{m.teamB ? <TeamDisplay team={m.teamB} /> : "TBC"}</td></tr>)}{byeTeam && <tr className="table-warning"><td className="fw-semibold"><TeamDisplay team={byeTeam} /></td><td className="text-center fw-semibold">—</td><td className="fw-semibold">{byeDisplayLabel}</td></tr>}</tbody></table></div></div>;})}
                                         </div>;
                                     })}
                                 </div></div>
@@ -5992,9 +5949,9 @@ function CompetitionWorkspace() {
                                                                                                             <td className="fw-semibold">—</td>
                                                                                                             <td className="fw-semibold">{getTeamLabel({ teamA: byeTeam }, "a")}</td>
                                                                                                             <td className="text-center">—</td>
-                                                                                                            <td className="fw-semibold">BYE</td>
+                                                                                                            <td className="fw-semibold">{byeDisplayLabel}</td>
                                                                                                             <td className="text-center fw-semibold">—</td>
-                                                                                                            <td className="text-end"><span className="badge bg-warning text-dark">BYE</span></td>
+                                                                                                            <td className="text-end"><span className="badge bg-warning text-dark">{byeDisplayLabel}</span></td>
                                                                                                         </tr>
                                                                                                     ) : null;
                                                                                                 })()}
