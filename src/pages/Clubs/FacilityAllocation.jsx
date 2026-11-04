@@ -13,6 +13,12 @@ const SESSIONS = [
 const localIso = (date, time) => new Date(`${date}T${time}+02:00`).toISOString();
 const keyFor = (roundId, matchId) => `${roundId}:${matchId}`;
 const overlaps = (aStart, aEnd, bStart, bEnd) => new Date(aStart) < new Date(bEnd) && new Date(bStart) < new Date(aEnd);
+// Normalize UUIDs before comparing booking ownership. A competition's own
+// previously saved bookings must not reduce capacity when it reallocates.
+const sameId = (left, right) =>
+  String(left ?? "").trim().toLowerCase() === String(right ?? "").trim().toLowerCase();
+const isExternalBooking = (booking, currentCompetitionId) =>
+  !sameId(booking.competition_id, currentCompetitionId);
 
 export default function FacilityAllocation() {
   const { competitionId } = useParams();
@@ -56,6 +62,42 @@ export default function FacilityAllocation() {
         supabase.from("competition_section_venues").select("section_id,club_id,green_id").eq("competition_id", competitionId)
       ]);
       for (const result of [roundsRes, matchesRes, teamsRes, greensRes, bookingsRes, clubsRes, sectionsRes, sectionVenuesRes]) if (result.error) throw result.error;
+
+      const rawBookings = bookingsRes.data || [];
+      const bookingMatchIds = [...new Set(rawBookings.map(booking => booking.match_id).filter(Boolean))];
+      let bookingMatchOwners = {};
+      if (bookingMatchIds.length) {
+        const { data: matchOwnerRows, error: matchOwnerError } = await supabase
+          .from("competition_matches")
+          .select("id,competition_id")
+          .in("id", bookingMatchIds);
+        if (matchOwnerError) throw new Error(`Unable to resolve facility booking owners: ${matchOwnerError.message}`);
+        bookingMatchOwners = Object.fromEntries((matchOwnerRows || []).map(match => [match.id, match.competition_id]));
+      }
+      const resolvedBookings = rawBookings.map(booking => ({
+        ...booking,
+        competition_id: bookingMatchOwners[booking.match_id] || booking.competition_id || null,
+        owner_resolution: bookingMatchOwners[booking.match_id] ? "match" : (booking.competition_id ? "booking" : "unresolved")
+      }));
+      const ownerCompetitionIds = [...new Set(resolvedBookings.map(booking => booking.competition_id).filter(Boolean))];
+      let ownerCompetitionNames = {};
+      if (ownerCompetitionIds.length) {
+        const { data: ownerCompetitions, error: ownerCompetitionError } = await supabase
+          .from("competitions").select("id,name").in("id", ownerCompetitionIds);
+        if (ownerCompetitionError) {
+          // Capacity calculations can still use IDs; names are diagnostic only.
+          ownerCompetitionNames = {};
+        } else {
+          ownerCompetitionNames = Object.fromEntries((ownerCompetitions || []).map(item => [item.id, item.name || "Unnamed competition"]));
+        }
+      }
+      const bookingsWithOwners = resolvedBookings.map(booking => ({
+        ...booking,
+        competition_name: ownerCompetitionNames[booking.competition_id] ||
+          (booking.competition_id ? `Unknown competition (${String(booking.competition_id).slice(0, 8)})` :
+            `Unlinked booking (${String(booking.id).slice(0, 8)})`)
+      }));
+
       setCompetition(competitionRes.data || { id: competitionId, name: "Competition" });
       const loadedTeams = teamsRes.data || [];
       setCompetitionTeams(loadedTeams);
@@ -74,7 +116,7 @@ export default function FacilityAllocation() {
       const eligibleIds = clubRows.filter(c => activeGreens.some(g => g.club_id === c.id)).map(c => c.id);
       setSelectedClubIds(current => !clubSelectionInitialized ? eligibleIds : current.filter(id => eligibleIds.includes(id)));
       setClubSelectionInitialized(true);
-      setBookings(bookingsRes.data || []);
+      setBookings(bookingsWithOwners);
     } catch (e) { setError(`Unable to load rink allocation data: ${e.message}`); }
     finally { setLoading(false); }
   }, [competitionId, clubSelectionInitialized]);
@@ -204,7 +246,7 @@ export default function FacilityAllocation() {
       if (direction === 2 && !green.allows_direction_change) return 0;
 
       const external = bookings.filter(booking =>
-        booking.competition_id !== competitionId &&
+        isExternalBooking(booking, competitionId) &&
         booking.status !== "cancelled" &&
         booking.green_id === green.id &&
         overlaps(startsAt, endsAt, booking.starts_at, booking.ends_at)
@@ -367,7 +409,7 @@ export default function FacilityAllocation() {
           let capacity = 0;
           for (const green of usableGreens) {
             for (const rink of green.rinks) {
-              const occupied = bookings.some(b => b.competition_id !== competitionId && b.status !== "cancelled" &&
+              const occupied = bookings.some(b => isExternalBooking(b, competitionId) && b.status !== "cancelled" &&
                 b.green_id === green.id && overlaps(slot.start, slot.end, b.starts_at, b.ends_at) &&
                 (Number(b.direction) !== slot.direction || b.rink_id === rink.id));
               if (!occupied) capacity += 1;
@@ -381,37 +423,186 @@ export default function FacilityAllocation() {
       const proposal = {};
       const assignedSlotLoad = new Map();
       const assignedClubLoad = new Map();
-      for (const section of orderedSections) {
+      const hostCount = new Map();
+      let searchNodes = 0;
+      const maxSearchNodes = 100000;
+
+      const findHostPlan = (sectionIndex) => {
+        if (sectionIndex >= orderedSections.length) return true;
+        searchNodes += 1;
+        if (searchNodes > maxSearchNodes) return false;
+
+        const section = orderedSections[sectionIndex];
         const demand = new Map();
         for (const slot of slotRows) {
           const count = slot.items.filter(row => row.section_id === section.id).length;
           if (count) demand.set(slot.key, count);
         }
+
         const candidates = selectedClubIds.map(clubId => {
           let feasible = true;
           let slack = 0;
+          let peakUtilisation = 0;
           for (const [slotKey, count] of demand) {
             const capacity = clubCapacityBySlot.get(`${clubId}|${slotKey}`) || 0;
             const current = assignedSlotLoad.get(`${clubId}|${slotKey}`) || 0;
             if (current + count > capacity) feasible = false;
             slack += capacity - current - count;
+            peakUtilisation = Math.max(
+              peakUtilisation,
+              (current + count) / Math.max(1, capacity)
+            );
           }
-          return { clubId, feasible, slack, load: assignedClubLoad.get(clubId) || 0, currentHostCount: Object.values(proposal).filter(id => id === clubId).length };
+          return {
+            clubId,
+            feasible,
+            slack,
+            peakUtilisation,
+            load: assignedClubLoad.get(clubId) || 0,
+            currentHostCount: hostCount.get(clubId) || 0
+          };
         }).filter(candidate => candidate.feasible)
-          // Consolidate the tournament at as few clubs as possible. Once a club
-          // is hosting a section, prefer filling its remaining capacity before
-          // opening another host, provided every session remains feasible.
-          .sort((a, b) => b.currentHostCount - a.currentHostCount || b.load - a.load || b.slack - a.slack);
-        if (!candidates.length) {
-          throw new Error(`No eligible club has enough available rink capacity to host ${section.section_name || `Section ${section.section_number}`} for every scheduled session. Select more eligible clubs, check facility capacity/bookings, or adjust the schedule.`);
+          // Prefer consolidating sections, but backtrack if that choice prevents
+          // a complete venue plan. This avoids rejecting a feasible distribution
+          // simply because an earlier section was assigned greedily.
+          .sort((a, b) =>
+            b.currentHostCount - a.currentHostCount ||
+            b.load - a.load ||
+            a.peakUtilisation - b.peakUtilisation ||
+            b.slack - a.slack
+          );
+
+        for (const candidate of candidates) {
+          const clubId = candidate.clubId;
+          proposal[section.id] = clubId;
+          hostCount.set(clubId, (hostCount.get(clubId) || 0) + 1);
+          assignedClubLoad.set(
+            clubId,
+            (assignedClubLoad.get(clubId) || 0) + (loadForSection.get(section.id) || 0)
+          );
+          for (const [slotKey, count] of demand) {
+            const key = `${clubId}|${slotKey}`;
+            assignedSlotLoad.set(key, (assignedSlotLoad.get(key) || 0) + count);
+          }
+
+          if (findHostPlan(sectionIndex + 1)) return true;
+
+          // Undo this choice and try the next eligible club.
+          delete proposal[section.id];
+          hostCount.set(clubId, Math.max(0, (hostCount.get(clubId) || 1) - 1));
+          assignedClubLoad.set(
+            clubId,
+            Math.max(0, (assignedClubLoad.get(clubId) || 0) - (loadForSection.get(section.id) || 0))
+          );
+          for (const [slotKey, count] of demand) {
+            const key = `${clubId}|${slotKey}`;
+            const remaining = (assignedSlotLoad.get(key) || 0) - count;
+            if (remaining > 0) assignedSlotLoad.set(key, remaining);
+            else assignedSlotLoad.delete(key);
+          }
         }
-        const chosen = candidates[0].clubId;
-        proposal[section.id] = chosen;
-        assignedClubLoad.set(chosen, (assignedClubLoad.get(chosen) || 0) + (loadForSection.get(section.id) || 0));
-        for (const [slotKey, count] of demand) {
-          const key = `${chosen}|${slotKey}`;
-          assignedSlotLoad.set(key, (assignedSlotLoad.get(key) || 0) + count);
+        return false;
+      };
+
+      const planFound = findHostPlan(0);
+      if (!planFound) {
+        const individuallyImpossible = orderedSections.map(section => {
+          const demand = new Map();
+          for (const slot of slotRows) {
+            const count = slot.items.filter(row => row.section_id === section.id).length;
+            if (count) demand.set(slot.key, count);
+          }
+          const clubOptions = selectedClubIds.map(clubId => {
+            let feasibleSlots = 0;
+            let worstShortfall = 0;
+            let worstSlot = null;
+            for (const [slotKey, count] of demand) {
+              const capacity = clubCapacityBySlot.get(`${clubId}|${slotKey}`) || 0;
+              if (capacity >= count) feasibleSlots += 1;
+              if (count - capacity > worstShortfall) {
+                worstShortfall = count - capacity;
+                worstSlot = { slotKey, demand: count, capacity };
+              }
+            }
+            return { clubId, feasibleSlots, worstShortfall, worstSlot };
+          });
+          const best = clubOptions.sort((a, b) =>
+            b.feasibleSlots - a.feasibleSlots || a.worstShortfall - b.worstShortfall
+          )[0];
+          return { section, demand, best };
+        });
+
+        const impossible = individuallyImpossible.find(item =>
+          item.best && item.best.feasibleSlots < item.demand.size
+        );
+
+        if (impossible?.best?.worstSlot) {
+          const [date, start] = impossible.best.worstSlot.slotKey.split("|");
+          const clubName = clubs.find(club => club.id === impossible.best.clubId)?.name || "the best eligible club";
+          throw new Error(
+            `${clubName} cannot host ${impossible.section.section_name || `Section ${impossible.section.section_number}`} ` +
+            `on ${date} at ${new Date(start).toLocaleTimeString("en-GB", { timeZone: "Africa/Johannesburg", hour: "2-digit", minute: "2-digit" })}: ` +
+            `${impossible.best.worstSlot.demand} simultaneous games are required, but only ${impossible.best.worstSlot.capacity} compatible unbooked rinks are available. ` +
+            `Select another eligible club, free additional rinks in the shared Facility Calendar, or adjust the schedule.`
+          );
         }
+
+        // Build a session-by-session capacity report so the user can see exactly
+        // which other-competition bookings are reducing capacity at each venue.
+        const slotDiagnostics = slotRows.map(slot => {
+          const demand = slot.items.length;
+          const clubDetails = selectedClubIds.map(clubId => {
+            const club = clubs.find(item => item.id === clubId);
+            const clubGreens = greens.filter(green => green.club_id === clubId && green.active && green.rinks.length);
+            const greenDetails = clubGreens.map(green => {
+              const external = bookings.filter(booking =>
+                isExternalBooking(booking, competitionId) && booking.status !== "cancelled" &&
+                booking.green_id === green.id && overlaps(slot.start, slot.end, booking.starts_at, booking.ends_at)
+              );
+              const wrongDirection = external.some(booking => Number(booking.direction) !== slot.direction);
+              const occupiedIds = new Set(external.map(booking => booking.rink_id).filter(Boolean));
+              const free = slot.direction === 2 && !green.allows_direction_change ? 0 :
+                wrongDirection ? 0 : green.rinks.filter(rink => !occupiedIds.has(rink.id)).length;
+              const occupiedLabels = wrongDirection ? ["whole green blocked by opposite-direction booking"] :
+                green.rinks.filter(rink => occupiedIds.has(rink.id)).map(rink => rink.label || rink.name || rink.id);
+              const bookingOwners = [...new Set(external.map(booking => booking.competition_name || "Unlinked booking"))];
+              return `${green.name}: ${free}/${green.rinks.length} free` +
+                (occupiedLabels.length ? ` (occupied: ${occupiedLabels.join(", ")})` : "") +
+                (bookingOwners.length ? ` [booked by: ${bookingOwners.join("; ")}]` : "") +
+                (slot.direction === 2 && !green.allows_direction_change ? " (direction change not permitted)" : "");
+            });
+            return {
+              name: club?.short_name || club?.name || "Club",
+              capacity: clubCapacityBySlot.get(`${clubId}|${slot.key}`) || 0,
+              greenDetails
+            };
+          });
+          return {
+            ...slot, demand,
+            totalCapacity: clubDetails.reduce((sum, club) => sum + club.capacity, 0),
+            clubDetails
+          };
+        });
+        const bottlenecks = slotDiagnostics.filter(slot => slot.totalCapacity < slot.demand)
+          .sort((a, b) => (a.totalCapacity - a.demand) - (b.totalCapacity - b.demand)).slice(0, 8);
+        const reportSlots = bottlenecks.length ? bottlenecks : slotDiagnostics.slice(0, 8);
+        const details = reportSlots.map(slot => {
+          const time = new Date(slot.start).toLocaleTimeString("en-GB", {
+            timeZone: "Africa/Johannesburg", hour: "2-digit", minute: "2-digit"
+          });
+          const clubsText = slot.clubDetails.map(club =>
+            `${club.name}: ${club.capacity} free [${club.greenDetails.join("; ") || "no active greens"}]`
+          ).join(" | ");
+          return `${slot.key.split("|")[0]} ${time}, Direction ${slot.direction}: ${slot.demand} games required, ${slot.totalCapacity} free across selected clubs. ${clubsText}`;
+        }).join("\n");
+        const reason = bottlenecks.length
+          ? "At least one session has fewer free rinks than simultaneous games required."
+          : "Each session has enough combined free rinks in isolation, but no fixed section-to-club arrangement works across every session. A supporting club may have spare rinks on some rounds but not all; sections must remain at one club throughout sectional play.";
+        throw new Error(
+          `BowlPoint could not find a complete section-to-club arrangement using ${selectedClubIds.length} selected eligible club(s). ${reason} ` +
+          `Search steps: ${Math.min(searchNodes, maxSearchNodes)}.\n\nCapacity breakdown:\n${details}\n\n` +
+          `Review the listed bookings in the Shared Facility Calendar or select another eligible club. No venue changes have been saved.`
+        );
       }
       setProposedSectionVenueIds(proposal);
       setVenueProposalReady(true);
@@ -433,7 +624,7 @@ export default function FacilityAllocation() {
       const green = greens.find(item => item.id === greenId);
       const usableRinks = green && (Number(direction) !== 2 || green.allows_direction_change)
         ? green.rinks.filter(rink => !bookings.some(b =>
-            b.competition_id !== competitionId &&
+            isExternalBooking(b, competitionId) &&
             b.status !== "cancelled" &&
             b.green_id === green.id &&
             overlaps(start, end, b.starts_at, b.ends_at) &&
@@ -527,7 +718,7 @@ export default function FacilityAllocation() {
         await saveSectionVenues(sectionVenueIds, sectionGreenMap);
         setSectionGreenIds(sectionGreenMap);
       }
-      const externalBookings = bookings.filter(b => b.status !== "cancelled" && b.competition_id !== competitionId);
+      const externalBookings = bookings.filter(b => b.status !== "cancelled" && isExternalBooking(b, competitionId));
       const teamRinkHistory = new Map();
       const planned = [];
       for (const row of rows) {
