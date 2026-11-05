@@ -262,40 +262,84 @@ function createRoundRobinRounds(teams) {
 }
 
 function validateRoundRobin(sectionTeams, rounds) {
-    const expectedOpponentCount = sectionTeams.length - 1;
-    const opponents = new Map(
-        sectionTeams.map(team => [team.id, new Set()])
-    );
-
-    for (const round of rounds) {
-        const seenThisRound = new Set();
-
-        for (const match of round.matches) {
-            if (seenThisRound.has(match.teamAId) || seenThisRound.has(match.teamBId)) {
-                throw new Error(
-                    `A team appears more than once in section round ${round.number}.`
-                );
-            }
-
-            seenThisRound.add(match.teamAId);
-            seenThisRound.add(match.teamBId);
-
-            if (opponents.get(match.teamAId).has(match.teamBId)) {
-                throw new Error(
-                    `Repeat opponent detected: ${match.teamAId} vs ${match.teamBId}.`
-                );
-            }
-
-            opponents.get(match.teamAId).add(match.teamBId);
-            opponents.get(match.teamBId).add(match.teamAId);
-        }
+    const teamIds = sectionTeams.map(team => String(team.id));
+    if (teamIds.length < 2) {
+        throw new Error("A round-robin section must contain at least two active entries.");
+    }
+    if (new Set(teamIds).size !== teamIds.length) {
+        throw new Error("The section contains duplicate active team entries.");
     }
 
-    for (const team of sectionTeams) {
-        const count = opponents.get(team.id).size;
-        if (count !== expectedOpponentCount) {
+    const expectedRoundCount = teamIds.length % 2 === 0 ? teamIds.length - 1 : teamIds.length;
+    const expectedMatchesPerRound = Math.floor(teamIds.length / 2);
+    if (rounds.length !== expectedRoundCount) {
+        throw new Error(
+            `The generated draw has ${rounds.length} rounds; expected ${expectedRoundCount}.`
+        );
+    }
+
+    const validIds = new Set(teamIds);
+    const opponents = new Map(teamIds.map(id => [id, new Set()]));
+    const byeCounts = new Map(teamIds.map(id => [id, 0]));
+
+    rounds.forEach((round, roundIndex) => {
+        if (Number(round.number) !== roundIndex + 1) {
+            throw new Error("Generated sectional rounds are not numbered consecutively.");
+        }
+        if (round.matches.length !== expectedMatchesPerRound) {
             throw new Error(
-                `Team ${team.name} has ${count} opponents; expected ${expectedOpponentCount}.`
+                `Section round ${round.number} has ${round.matches.length} matches; expected ${expectedMatchesPerRound}.`
+            );
+        }
+
+        const seenThisRound = new Set();
+        for (const match of round.matches) {
+            const teamAId = String(match.teamAId);
+            const teamBId = String(match.teamBId);
+
+            if (!validIds.has(teamAId) || !validIds.has(teamBId)) {
+                throw new Error(
+                    `Section round ${round.number} contains a team that is not an active member of this section.`
+                );
+            }
+            if (teamAId === teamBId) {
+                throw new Error(`A team is scheduled to play itself in section round ${round.number}.`);
+            }
+            if (seenThisRound.has(teamAId) || seenThisRound.has(teamBId)) {
+                throw new Error(`A team appears more than once in section round ${round.number}.`);
+            }
+            seenThisRound.add(teamAId);
+            seenThisRound.add(teamBId);
+
+            if (opponents.get(teamAId).has(teamBId)) {
+                throw new Error(`Repeat opponent detected: ${teamAId} vs ${teamBId}.`);
+            }
+            opponents.get(teamAId).add(teamBId);
+            opponents.get(teamBId).add(teamAId);
+        }
+
+        if (teamIds.length % 2 !== 0) {
+            const byeTeamId = round.byeTeam?.id == null ? null : String(round.byeTeam.id);
+            if (!byeTeamId || !validIds.has(byeTeamId) || seenThisRound.has(byeTeamId)) {
+                throw new Error(`Section round ${round.number} does not have exactly one valid bye.`);
+            }
+            byeCounts.set(byeTeamId, byeCounts.get(byeTeamId) + 1);
+        } else if (round.byeTeam) {
+            throw new Error(`Section round ${round.number} unexpectedly contains a bye.`);
+        }
+    });
+
+    for (const team of sectionTeams) {
+        const teamId = String(team.id);
+        const count = opponents.get(teamId).size;
+        if (count !== teamIds.length - 1) {
+            throw new Error(
+                `Team ${team.name || teamId} has ${count} opponents; expected ${teamIds.length - 1}.`
+            );
+        }
+        if (teamIds.length % 2 !== 0 && byeCounts.get(teamId) !== 1) {
+            throw new Error(
+                `Team ${team.name || teamId} has ${byeCounts.get(teamId)} byes; expected exactly 1.`
             );
         }
     }

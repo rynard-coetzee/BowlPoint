@@ -18,7 +18,7 @@ function getSectionByeTeam(section, roundNumber) {
 
     return (section.teams || []).find(team => !playingTeamIds.has(team.competition_team_id || team.id)) || null;
 }
-import { generateCompetitionDrawProposal, createRoundRobinRounds } from "./competitionDrawEngine";
+import { generateCompetitionDrawProposal, createRoundRobinRounds, validateRoundRobin } from "./competitionDrawEngine";
 import { buildOfficialLadiesDistrictPairsProposal } from "./officialLadiesDistrictPairs";
 import { buildCompetitionScheduleProposal } from "./competitionScheduleEngine";
 import CompetitionLiveCard from "./CompetitionLiveCard";
@@ -56,6 +56,13 @@ function CompetitionWorkspace() {
     const [sectionEntryAction, setSectionEntryAction] = useState("swap");
     const [withdrawSectionId, setWithdrawSectionId] = useState("");
     const [withdrawTeamId, setWithdrawTeamId] = useState("");
+    const [replacementSectionId, setReplacementSectionId] = useState("");
+    const [replacementTeamId, setReplacementTeamId] = useState("");
+    const [replacementPosition, setReplacementPosition] = useState("");
+    const [replacementPlayerMode, setReplacementPlayerMode] = useState("existing");
+    const [replacementPlayerId, setReplacementPlayerId] = useState("");
+    const [replacementSearch, setReplacementSearch] = useState("");
+    const [replacementNewPlayer, setReplacementNewPlayer] = useState({ first_name: "", last_name: "", nickname: "", bsa_number: "" });
     const [sectionManagerMessage, setSectionManagerMessage] = useState("");
     const [scheduleProposal, setScheduleProposal] = useState(null);
     const [scheduleAssignments, setScheduleAssignments] = useState([]);
@@ -280,6 +287,7 @@ function CompetitionWorkspace() {
                 display_name,
                 club_id,
                 second_club_id,
+                bsa_number,
                 active
             `)
             .eq("active", true)
@@ -510,6 +518,27 @@ function CompetitionWorkspace() {
         setConfirmedDraw(persistedSections.length ? {
             sections: persistedSections.map(section => ({
                 ...section,
+                allTeams: (sectionTeamsResult.data || [])
+                    .filter(row => row.section_id === section.id)
+                    .map(row => {
+                        const sectionTeam = row.competition_teams;
+                        const fullTeam = teamById.get(row.competition_team_id);
+                        return fullTeam ? {
+                            ...fullTeam,
+                            ...(sectionTeam || {}),
+                            id: fullTeam.id,
+                            competition_team_id: row.competition_team_id,
+                            section_id: row.section_id,
+                            section_team_id: row.id,
+                            competition_team_players: fullTeam.competition_team_players || []
+                        } : sectionTeam ? {
+                            ...sectionTeam,
+                            competition_team_id: row.competition_team_id,
+                            section_id: row.section_id,
+                            section_team_id: row.id
+                        } : null;
+                    })
+                    .filter(Boolean),
                 teams: (sectionTeamsResult.data || [])
                     .filter(row => row.section_id === section.id)
                     .map(row => {
@@ -1919,61 +1948,36 @@ function CompetitionWorkspace() {
     /*
      * Change team status.
      */
-    const handleChangeTeamStatus = async (
-        team,
-        status
-    ) => {
-        const statusText = {
-            active: "active",
-            withdrawn: "withdrawn",
-            eliminated: "eliminated"
-        };
-
+    const handleChangeTeamStatus = async (team, status) => {
+        const statusText = { active: "active", withdrawn: "withdrawn", eliminated: "eliminated" };
         if ((status === "withdrawn" || status === "active") && hasCompetitionScoringStarted()) {
             alert("Players/teams cannot be withdrawn or reinstated after scoring has started.");
             return;
         }
 
         const membershipResult = (status === "withdrawn" || status === "active")
-            ? await supabase
-                .from("competition_section_teams")
-                .select("id, section_id")
-                .eq("competition_team_id", team.id)
-                .maybeSingle()
+            ? await supabase.from("competition_section_teams")
+                .select("id, section_id").eq("competition_team_id", team.id).maybeSingle()
             : { data: null, error: null };
-
         if (membershipResult.error) {
             alert(`Unable to check the section membership.\n\n${membershipResult.error.message}`);
             return;
         }
 
         const sectionId = membershipResult.data?.section_id || null;
-        const section = sectionId
-            ? confirmedDraw?.sections?.find(item => item.id === sectionId)
-            : null;
+        const section = sectionId ? confirmedDraw?.sections?.find(item => item.id === sectionId) : null;
         const shouldRegenerate = Boolean(section && (status === "withdrawn" || status === "active"));
-
         if (status === "withdrawn" && shouldRegenerate && section.teams.length <= 3) {
             alert("This withdrawal would leave fewer than three active entries in the section.");
             return;
         }
 
-        const confirmed = window.confirm(
-            status === "withdrawn" && shouldRegenerate
-                ? `Withdraw ${getTeamBaseName(team)} from this competition?\n\nThe entry will be removed from the active draw, sectional fixtures will be regenerated, and any bookings for matches no longer required will be removed. This is only allowed before scoring starts.`
-                : `Set Team ${team.team_number} to ${statusText[status]}?`
-        );
-
-        if (!confirmed) return;
+        if (!window.confirm(status === "withdrawn" && shouldRegenerate
+            ? `Withdraw ${getTeamBaseName(team)}? The sectional fixtures will be updated atomically. Bookings for obsolete matches will be removed.`
+            : `Set Team ${team.team_number} to ${statusText[status]}?`)) return;
 
         setSavingSectionSwap(true);
         try {
-            const { error } = await supabase
-                .from("competition_teams")
-                .update({ status })
-                .eq("id", team.id);
-            if (error) throw error;
-
             if (shouldRegenerate) {
                 const activeEntries = section.teams.filter(entry =>
                     String(entry.competition_team_id || entry.id) !== String(team.id)
@@ -1986,24 +1990,177 @@ function CompetitionWorkspace() {
                         section_team_id: membershipResult.data.id
                     });
                 }
-
-                await regenerateSavedSectionFixtures(new Map([[sectionId, activeEntries]]));
+                await regenerateSavedSectionFixtures(
+                    new Map([[sectionId, activeEntries]]),
+                    [],
+                    [{ team_id: team.id, status }]
+                );
+            } else {
+                const { error } = await supabase.from("competition_teams")
+                    .update({ status }).eq("id", team.id);
+                if (error) throw error;
             }
-
             await loadData();
             if (status === "withdrawn" && shouldRegenerate) {
-                setSectionManagerMessage(
-                    `${getTeamBaseName(team)} has been withdrawn. The section now has ${section.teams.length - 1} active entries and its fixtures have been regenerated.`
-                );
+                setSectionManagerMessage(`${getTeamBaseName(team)} has been withdrawn and the sectional fixtures have been synchronized.`);
             }
         } catch (error) {
             console.error("Error changing team status:", error);
-            // Restore the previous status if fixture regeneration did not complete.
-            await supabase.from("competition_teams")
-                .update({ status: team.status || "active" })
-                .eq("id", team.id);
             await loadData();
-            alert(`Unable to update team status.\n\n${error.message}`);
+            alert(`Unable to update team status. No partial section/fixture change was committed.\n\n${error.message}`);
+        } finally {
+            setSavingSectionSwap(false);
+        }
+    };
+
+    /*
+     * Replace a withdrawn entry with a player from the same club.
+     * The competition team and section membership IDs remain unchanged so
+     * the replacement inherits the existing draw position.
+     */
+    const handleAddReplacement = async () => {
+        if (hasCompetitionScoringStarted()) {
+            alert("Replacements cannot be made after scoring has started.");
+            return;
+        }
+
+        const section = confirmedDraw?.sections?.find(item => item.id === replacementSectionId);
+        const entry = (section?.allTeams || section?.teams || []).find(item => String(item.competition_team_id || item.id) === String(replacementTeamId));
+        const team = teams.find(item => String(item.id) === String(replacementTeamId));
+        if (!section || !entry || !team) {
+            alert("Choose a section and entry to replace first.");
+            return;
+        }
+        if (team.status !== "active" && team.status !== "withdrawn") {
+            alert("Only active or withdrawn entries can be replaced.");
+            return;
+        }
+        if (!entry.section_team_id) {
+            alert("The saved section membership could not be identified. Refresh the competition and try again.");
+            return;
+        }
+
+        const positions = getPositions(competition.format);
+        const positionKey = competition.format === "singles" ? "player" : replacementPosition;
+        if (!positionKey || !positions.some(position => position.key === positionKey)) {
+            alert("Select the team position being replaced.");
+            return;
+        }
+        const oldRosterRow = (team.competition_team_players || []).find(row => row.position === positionKey);
+        if (!oldRosterRow) {
+            alert("The existing player in that position could not be found.");
+            return;
+        }
+
+        const clubId = team.club_id;
+        if (!clubId) {
+            alert("The withdrawn entry does not have a club assigned.");
+            return;
+        }
+
+        const enteredPlayerIds = new Set(
+            teams.flatMap(item => (item.competition_team_players || [])
+                .filter(row => !(item.id === team.id && row.id === oldRosterRow.id))
+                .map(row => String(row.player_id)))
+        );
+        let replacementPlayerIdToUse = replacementPlayerId;
+        let newlyCreatedPlayerId = null;
+
+        if (replacementPlayerMode === "new") {
+            const firstName = replacementNewPlayer.first_name.trim();
+            const lastName = replacementNewPlayer.last_name.trim();
+            if (!firstName || !lastName) {
+                alert("Enter the replacement player's first name and surname.");
+                return;
+            }
+            const insertPayload = {
+                first_name: firstName,
+                last_name: lastName,
+                nickname: replacementNewPlayer.nickname.trim() || null,
+                bsa_number: replacementNewPlayer.bsa_number.trim() || null,
+                club_id: clubId,
+                active: true
+            };
+            setSavingSectionSwap(true);
+            try {
+                const { data, error } = await supabase.from("players").insert(insertPayload).select("id").single();
+                if (error) throw error;
+                replacementPlayerIdToUse = data.id;
+                newlyCreatedPlayerId = data.id;
+            } catch (error) {
+                setSavingSectionSwap(false);
+                alert(`Unable to create the replacement player.\n\n${error.message}`);
+                return;
+            }
+        } else {
+            const selectedPlayer = players.find(player => String(player.id) === String(replacementPlayerIdToUse));
+            const belongsToClub = selectedPlayer && (
+                String(selectedPlayer.club_id || "") === String(clubId) ||
+                String(selectedPlayer.second_club_id || "") === String(clubId)
+            );
+            if (!selectedPlayer || !belongsToClub) {
+                alert("Choose an existing player who belongs to the same club as the withdrawn entry.");
+                return;
+            }
+        }
+
+        if (!replacementPlayerIdToUse || enteredPlayerIds.has(String(replacementPlayerIdToUse))) {
+            if (newlyCreatedPlayerId) await supabase.from("players").delete().eq("id", newlyCreatedPlayerId);
+            setSavingSectionSwap(false);
+            alert("That player is already entered in this competition. A player can only be entered once.");
+            return;
+        }
+
+        const oldPlayerId = oldRosterRow.player_id;
+        const replacementPlayer = replacementPlayerMode === "new"
+            ? { ...replacementNewPlayer, first_name: replacementNewPlayer.first_name.trim(), last_name: replacementNewPlayer.last_name.trim() }
+            : players.find(player => String(player.id) === String(replacementPlayerIdToUse));
+        const oldPlayer = oldRosterRow.players;
+        const oldName = playerName(oldPlayer);
+        const newName = playerName(replacementPlayer);
+        if (!window.confirm(
+            `Replace ${oldName} with ${newName} in ${getTeamBaseName(team)}?\n\n` +
+            `The replacement must be from ${team.clubs?.name || "the same club"}. The team number, section, draw position and retained fixture IDs will remain unchanged. ` +
+            `Affected sectional fixtures will be synchronized; playoff fixtures and allocations will not be changed.`
+        )) {
+            if (newlyCreatedPlayerId) await supabase.from("players").delete().eq("id", newlyCreatedPlayerId);
+            setSavingSectionSwap(false);
+            return;
+        }
+
+        try {
+            const rosterUpdate = await supabase.from("competition_team_players")
+                .update({ player_id: replacementPlayerIdToUse })
+                .eq("id", oldRosterRow.id);
+            if (rosterUpdate.error) throw rosterUpdate.error;
+
+            const activeEntries = section.teams.filter(item => {
+                const itemTeamId = item.competition_team_id || item.id;
+                const fullTeam = teams.find(candidate => candidate.id === itemTeamId) || item;
+                return fullTeam.status !== "withdrawn" || String(itemTeamId) === String(team.id);
+            });
+            await regenerateSavedSectionFixtures(
+                new Map([[section.id, activeEntries]]),
+                [],
+                team.status === "withdrawn" ? [{ team_id: team.id, status: "active" }] : []
+            );
+
+            await loadData();
+            setSectionManagerMessage(`${newName} has replaced ${oldName} in ${getTeamBaseName(team)}. The existing draw position was retained.`);
+            setReplacementTeamId("");
+            setReplacementPlayerId("");
+            setReplacementPosition("");
+            setReplacementSearch("");
+            setReplacementNewPlayer({ first_name: "", last_name: "", nickname: "", bsa_number: "" });
+        } catch (error) {
+            console.error("Unable to add replacement:", error);
+            // Restore the previous roster member if the fixture transaction fails.
+            const rollback = await supabase.from("competition_team_players")
+                .update({ player_id: oldPlayerId })
+                .eq("id", oldRosterRow.id);
+            if (rollback.error) console.error("Replacement roster rollback failed:", rollback.error);
+            await loadData();
+            alert(`Unable to complete the replacement. The original roster member was restored where possible.\n\n${error.message}`);
         } finally {
             setSavingSectionSwap(false);
         }
@@ -2628,11 +2785,14 @@ function CompetitionWorkspace() {
      * Obsolete matches (e.g. rounds 4 and 5 in a four-player section) have only
      * their own facility bookings and match rows removed.
      */
-    const regenerateSavedSectionFixtures = async (sectionEntries) => {
-        const fixtureSnapshots = [];
-        const updates = [];
-        const newMatchRows = [];
-        const obsoleteMatches = [];
+    const regenerateSavedSectionFixtures = async (
+        sectionEntries,
+        membershipChanges = [],
+        teamStatusChanges = []
+    ) => {
+        const fixtureUpdates = [];
+        const fixtureInserts = [];
+        const obsoleteIds = new Set();
 
         for (const [sectionId, entries] of sectionEntries.entries()) {
             const section = confirmedDraw.sections.find(item => item.id === sectionId);
@@ -2648,17 +2808,20 @@ function CompetitionWorkspace() {
                     clubName: fullTeam.clubs?.name || ""
                 };
             });
-
+            // Validate the complete round-robin before preparing any database changes.
+            // This prevents a stale/mismatched section entry list from saving opponents
+            // that do not belong to this section, repeat pairings, or missing byes.
             const generatedRounds = createRoundRobinRounds(drawTeams);
+            validateRoundRobin(drawTeams, generatedRounds);
+            const activeTeamIds = new Set(drawTeams.map(team => String(team.id)));
             const sectionMatches = confirmedDraw.matches.filter(match => match.section_id === sectionId);
+            const activeRoundNumbers = new Set(generatedRounds.map(round => Number(round.number)));
 
             for (const generatedRound of generatedRounds) {
                 const roundRecord = confirmedDraw.rounds.find(round =>
                     Number(round.round_number) === Number(generatedRound.number)
                 );
-                if (!roundRecord) {
-                    throw new Error(`${section.section_name} is missing saved round ${generatedRound.number}.`);
-                }
+                if (!roundRecord) throw new Error(`${section.section_name} is missing saved round ${generatedRound.number}.`);
 
                 const existingMatches = sectionMatches
                     .filter(match => match.round_id === roundRecord.id)
@@ -2671,116 +2834,55 @@ function CompetitionWorkspace() {
                 );
 
                 generatedRound.matches.forEach((generatedMatch, index) => {
+                    if (
+                        !activeTeamIds.has(String(generatedMatch.teamAId)) ||
+                        !activeTeamIds.has(String(generatedMatch.teamBId)) ||
+                        String(generatedMatch.teamAId) === String(generatedMatch.teamBId)
+                    ) {
+                        throw new Error(
+                            `${section.section_name}, round ${generatedRound.number} contains an invalid opponent pairing. No changes were saved.`
+                        );
+                    }
                     const savedMatch = existingMatches[index];
                     if (savedMatch) {
-                        fixtureSnapshots.push({
+                        fixtureUpdates.push({
                             id: savedMatch.id,
-                            team_a_id: savedMatch.team_a_id,
-                            team_b_id: savedMatch.team_b_id
-                        });
-                        updates.push({
-                            id: savedMatch.id,
+                            section_id: sectionId,
+                            round_id: roundRecord.id,
                             team_a_id: generatedMatch.teamAId,
                             team_b_id: generatedMatch.teamBId
                         });
                     } else {
-                        // A section can grow again after a replacement player is
-                        // moved into it. Recreate only the missing fixture rows.
-                        newMatchRows.push({
-                            competition_id: competitionId,
-                            round_id: roundRecord.id,
+                        fixtureInserts.push({
                             section_id: sectionId,
+                            round_id: roundRecord.id,
                             match_number: roundMatchNumberBase + (index - existingMatches.length) + 1,
                             team_a_id: generatedMatch.teamAId,
-                            team_b_id: generatedMatch.teamBId,
-                            score_a: null,
-                            score_b: null,
-                            skins_a: null,
-                            skins_b: null,
-                            points_a: null,
-                            points_b: null,
-                            shots_for_a: null,
-                            shots_for_b: null,
-                            completed: false,
-                            completed_at: null,
-                            next_match_id: null,
-                            next_match_slot: null
+                            team_b_id: generatedMatch.teamBId
                         });
                     }
                 });
 
-                existingMatches.slice(generatedRound.matches.length).forEach(match => {
-                    obsoleteMatches.push(match);
-                });
+                existingMatches.slice(generatedRound.matches.length).forEach(match => obsoleteIds.add(match.id));
             }
 
-            const activeRoundNumbers = new Set(generatedRounds.map(round => Number(round.number)));
             sectionMatches.forEach(match => {
                 const roundNumber = confirmedDraw.rounds.find(round => round.id === match.round_id)?.round_number;
-                if (!activeRoundNumbers.has(Number(roundNumber))) {
-                    obsoleteMatches.push({
-                        id: match.id,
-                        team_a_id: match.team_a_id,
-                        team_b_id: match.team_b_id,
-                        round_id: match.round_id,
-                        section_id: match.section_id,
-                        match_number: match.match_number
-                    });
-                }
+                if (!activeRoundNumbers.has(Number(roundNumber))) obsoleteIds.add(match.id);
             });
         }
 
-        // Update retained fixture rows first. Their IDs, dates, venues and rink
-        // bookings remain unchanged.
-        for (const fixture of updates) {
-            const { data, error } = await supabase
-                .from("competition_matches")
-                .update({
-                    team_a_id: fixture.team_a_id,
-                    team_b_id: fixture.team_b_id
-                })
-                .eq("id", fixture.id)
-                .select("id");
-            if (error) throw error;
-            if (!data?.length) throw new Error(`Fixture ${fixture.id} was not updated. Check Supabase RLS policies.`);
-        }
-
-        const createdMatchIds = [];
-        if (newMatchRows.length) {
-            const { data, error } = await supabase
-                .from("competition_matches")
-                .insert(newMatchRows)
-                .select("id");
-            if (error) throw error;
-            createdMatchIds.push(...(data || []).map(row => row.id));
-        }
-
-        // Only remove facility bookings attached to matches that no longer exist
-        // in the smaller section's round robin (typically rounds 4 and 5).
-        const obsoleteIds = obsoleteMatches.map(match => match.id);
-        if (obsoleteIds.length) {
-            // Match/player assignment rows reference the fixture and must be
-            // removed before the obsolete match rows can be deleted.
-            const { error: matchPlayersDeleteError } = await supabase
-                .from("competition_match_players")
-                .delete()
-                .in("match_id", obsoleteIds);
-            if (matchPlayersDeleteError) throw matchPlayersDeleteError;
-
-            const { error: bookingDeleteError } = await supabase
-                .from("facility_bookings")
-                .delete()
-                .in("match_id", obsoleteIds);
-            if (bookingDeleteError) throw bookingDeleteError;
-
-            const { error: matchDeleteError } = await supabase
-                .from("competition_matches")
-                .delete()
-                .in("id", obsoleteIds);
-            if (matchDeleteError) throw matchDeleteError;
-        }
-
-        return { fixtureSnapshots, obsoleteMatches, createdMatchIds };
+        const { data, error } = await supabase.rpc("sync_section_fixtures_atomic", {
+            p_competition_id: competitionId,
+            p_membership_changes: membershipChanges,
+            p_team_status_changes: teamStatusChanges,
+            p_fixture_updates: fixtureUpdates,
+            p_fixture_inserts: fixtureInserts,
+            p_obsolete_match_ids: [...obsoleteIds]
+        });
+        if (error) throw error;
+        if (!data?.success) throw new Error("Supabase did not confirm the sectional fixture update.");
+        return data;
     };
 
     const hasCompetitionScoringStarted = () => Boolean(
@@ -2797,83 +2899,35 @@ function CompetitionWorkspace() {
             alert("Entries cannot be moved after scoring has started.");
             return;
         }
-
         const sourceSection = confirmedDraw.sections.find(section => section.id === swapSectionA);
         const targetSection = confirmedDraw.sections.find(section => section.id === swapSectionB);
         if (!sourceSection || !targetSection || sourceSection.id === targetSection.id || !swapTeamA) {
-            alert("Choose an entry and two different sections.");
-            return;
+            alert("Choose an entry and two different sections."); return;
         }
-
-        const entry = sourceSection.teams.find(item =>
-            String(item.competition_team_id || item.id) === String(swapTeamA)
-        );
-        if (!entry) {
-            alert("The selected entry could not be found. Refresh the draw and try again.");
-            return;
-        }
-
+        const entry = sourceSection.teams.find(item => String(item.competition_team_id || item.id) === String(swapTeamA));
+        if (!entry) { alert("The selected entry could not be found. Refresh the draw and try again."); return; }
         const sourceEntries = sourceSection.teams.filter(item => item.section_team_id !== entry.section_team_id);
         const targetEntries = [...targetSection.teams, entry];
-        if (sourceEntries.length < 3) {
-            alert("A section must retain at least three active entries.");
-            return;
-        }
-        if (targetEntries.length > 7) {
-            alert("The destination section would exceed the supported section size.");
-            return;
-        }
-        if (!entry.section_team_id) {
-            alert("The saved section membership ID could not be identified. Refresh the draw and try again.");
-            return;
-        }
-
+        if (sourceEntries.length < 3) { alert("A section must retain at least three active entries."); return; }
+        if (targetEntries.length > 7) { alert("The destination section would exceed the supported section size."); return; }
+        if (!entry.section_team_id) { alert("The saved section membership ID could not be identified. Refresh the draw and try again."); return; }
         const team = teams.find(item => item.id === (entry.competition_team_id || entry.id)) || entry;
-        if (!window.confirm(
-            `Move ${getTeamBaseName(team)} from ${sourceSection.section_name} to ${targetSection.section_name}?\n\n` +
-            `The source section will have ${sourceEntries.length} entries and the destination will have ${targetEntries.length}.\n` +
-            "Sectional fixtures will be regenerated. Existing fixture dates and rink bookings will be retained where matches remain; bookings for obsolete matches will be removed."
-        )) return;
+        if (!window.confirm(`Move ${getTeamBaseName(team)} from ${sourceSection.section_name} to ${targetSection.section_name}?\n\nMembership and sectional fixtures will be saved in one database transaction. Existing match IDs and bookings for retained fixtures will be preserved.`)) return;
 
         setSavingSectionSwap(true);
         setSectionManagerMessage("");
-        const oldMembership = { id: entry.section_team_id, section_id: sourceSection.id };
-        let fixtureState = null;
         try {
-            const { data, error } = await supabase
-                .from("competition_section_teams")
-                .update({ section_id: targetSection.id })
-                .eq("id", entry.section_team_id)
-                .select("id");
-            if (error) throw error;
-            if (!data?.length) throw new Error("The section membership was not updated. Check Supabase RLS policies.");
-
-            fixtureState = await regenerateSavedSectionFixtures(new Map([
-                [sourceSection.id, sourceEntries],
-                [targetSection.id, targetEntries]
-            ]));
-
-            await loadData();
-            setSectionManagerMessage(
-                `${getTeamBaseName(team)} moved successfully. ${sourceSection.section_name} now has ${sourceEntries.length} entries; ${targetSection.section_name} has ${targetEntries.length}.`
+            await regenerateSavedSectionFixtures(
+                new Map([[sourceSection.id, sourceEntries], [targetSection.id, targetEntries]]),
+                [{ id: entry.section_team_id, section_id: targetSection.id }]
             );
-            setSwapTeamA("");
-            setSwapTeamB("");
+            await loadData();
+            setSectionManagerMessage(`${getTeamBaseName(team)} moved successfully. Section memberships and fixtures were committed together.`);
+            setSwapTeamA(""); setSwapTeamB("");
         } catch (error) {
             console.error("Unable to move section entry:", error);
-            await supabase.from("competition_section_teams")
-                .update({ section_id: oldMembership.section_id })
-                .eq("id", oldMembership.id);
-
-            if (fixtureState?.fixtureSnapshots?.length) {
-                for (const fixture of fixtureState.fixtureSnapshots) {
-                    await supabase.from("competition_matches")
-                        .update({ team_a_id: fixture.team_a_id, team_b_id: fixture.team_b_id })
-                        .eq("id", fixture.id);
-                }
-            }
             await loadData();
-            alert(`Unable to move entry. The original membership and retained fixtures were restored where possible.\n\n${error.message}`);
+            alert(`Unable to move entry. The database transaction was rolled back; no partial change was committed.\n\n${error.message}`);
         } finally {
             setSavingSectionSwap(false);
         }
@@ -2886,163 +2940,42 @@ function CompetitionWorkspace() {
      */
     const handleSwapSectionEntries = async () => {
         if (!confirmedDraw?.sections?.length) return;
-
         const sectionA = confirmedDraw.sections.find(section => section.id === swapSectionA);
         const sectionB = confirmedDraw.sections.find(section => section.id === swapSectionB);
-        if (!sectionA || !sectionB || sectionA.id === sectionB.id) {
-            alert("Choose two different sections.");
-            return;
-        }
-        if (!swapTeamA || !swapTeamB || swapTeamA === swapTeamB) {
-            alert("Choose one entry from each section to swap.");
-            return;
-        }
-
+        if (!sectionA || !sectionB || sectionA.id === sectionB.id) { alert("Choose two different sections."); return; }
+        if (!swapTeamA || !swapTeamB || swapTeamA === swapTeamB) { alert("Choose one entry from each section to swap."); return; }
         const entryA = sectionA.teams.find(entry => String(entry.competition_team_id || entry.id) === String(swapTeamA));
         const entryB = sectionB.teams.find(entry => String(entry.competition_team_id || entry.id) === String(swapTeamB));
-        if (!entryA || !entryB) {
-            alert("The selected entries could not be found in their sections. Refresh the draw and try again.");
-            return;
-        }
-
-        const hasStartedScoring = confirmedDraw.matches.some(match =>
-            match.completed ||
-            ["score_a", "score_b", "points_a", "points_b", "skins_a", "skins_b", "shots_for_a", "shots_for_b"]
-                .some(field => match[field] !== null && match[field] !== undefined && match[field] !== "")
-        );
-        if (hasStartedScoring) {
-            alert("Section entries cannot be changed after scoring has started. This protects recorded results and playoff progression.");
-            return;
-        }
+        if (!entryA || !entryB) { alert("The selected entries could not be found. Refresh the draw and try again."); return; }
+        if (hasCompetitionScoringStarted()) { alert("Section entries cannot be changed after scoring has started."); return; }
+        if (!entryA.section_team_id || !entryB.section_team_id) { alert("Saved section membership IDs are missing. Refresh the draw and try again."); return; }
 
         const confirmed = window.confirm(
             `Swap these entries?\n\n${sectionA.section_name}: ${getTeamBaseName(teams.find(team => team.id === entryA.competition_team_id) || entryA)}\n` +
             `with\n${sectionB.section_name}: ${getTeamBaseName(teams.find(team => team.id === entryB.competition_team_id) || entryB)}\n\n` +
-            `Section sizes will remain unchanged and BowlPoint will regenerate the sectional fixtures.`
+            "Both membership changes and all affected sectional fixtures will be committed atomically."
         );
         if (!confirmed) return;
 
         setSavingSectionSwap(true);
         setSectionManagerMessage("");
-
-        const oldMemberships = [
-            { id: entryA.section_team_id, section_id: sectionA.id },
-            { id: entryB.section_team_id, section_id: sectionB.id }
-        ];
-        const newMemberships = [
-            { id: entryA.section_team_id, section_id: sectionB.id },
-            { id: entryB.section_team_id, section_id: sectionA.id }
-        ];
-        if (!oldMemberships.every(row => row.id)) {
-            alert("The saved section membership IDs could not be identified. Refresh the draw and try again.");
-            return;
-        }
-        const originalFixtureRows = [];
-        const fixtureUpdates = [];
-
+        const nextA = sectionA.teams.map(entry => entry.section_team_id === entryA.section_team_id ? entryB : entry);
+        const nextB = sectionB.teams.map(entry => entry.section_team_id === entryB.section_team_id ? entryA : entry);
         try {
-            const actualTeamId = entry => entry.competition_team_id || entry.id;
-            const toDrawTeam = entry => {
-                const teamId = actualTeamId(entry);
-                const fullTeam = teams.find(team => team.id === teamId) || entry;
-                return {
-                    id: teamId,
-                    name: getTeamBaseName(fullTeam),
-                    clubId: fullTeam.club_id || null,
-                    clubName: fullTeam.clubs?.name || ""
-                };
-            };
-
-            const nextSectionTeams = new Map([
-                [sectionA.id, sectionA.teams.map(entry => entry.section_team_id === entryA.section_team_id ? entryB : entry).map(toDrawTeam)],
-                [sectionB.id, sectionB.teams.map(entry => entry.section_team_id === entryB.section_team_id ? entryA : entry).map(toDrawTeam)]
-            ]);
-
-            for (const section of [sectionA, sectionB]) {
-                const generatedRounds = createRoundRobinRounds(nextSectionTeams.get(section.id));
-                for (const generatedRound of generatedRounds) {
-                    const roundRecord = confirmedDraw.rounds.find(round =>
-                        Number(round.round_number) === Number(generatedRound.number)
-                    );
-                    if (!roundRecord) {
-                        throw new Error(`The saved draw is missing sectional round ${generatedRound.number}.`);
-                    }
-
-                    const existingMatches = confirmedDraw.matches
-                        .filter(match => match.section_id === section.id && match.round_id === roundRecord.id)
-                        .sort((a, b) => Number(a.match_number) - Number(b.match_number));
-
-                    if (existingMatches.length !== generatedRound.matches.length) {
-                        throw new Error(
-                            `${section.section_name} has a different number of saved fixtures in Round ${generatedRound.number}. ` +
-                            `The swap has been cancelled to protect the existing schedule.`
-                        );
-                    }
-
-                    generatedRound.matches.forEach((generatedMatch, index) => {
-                        const savedMatch = existingMatches[index];
-                        originalFixtureRows.push({
-                            id: savedMatch.id,
-                            team_a_id: savedMatch.team_a_id,
-                            team_b_id: savedMatch.team_b_id
-                        });
-                        fixtureUpdates.push({
-                            id: savedMatch.id,
-                            team_a_id: generatedMatch.teamAId,
-                            team_b_id: generatedMatch.teamBId
-                        });
-                    });
-                }
-            }
-
-            // Update the two section memberships, then update the existing fixture
-            // rows in place. Keeping fixture IDs preserves their saved dates and
-            // facility-booking links; only the participating teams are regenerated.
-            for (const membership of newMemberships) {
-                const { error } = await supabase
-                    .from("competition_section_teams")
-                    .update({ section_id: membership.section_id })
-                    .eq("id", membership.id);
-                if (error) throw error;
-            }
-
-            for (const fixture of fixtureUpdates) {
-                const { error } = await supabase
-                    .from("competition_matches")
-                    .update({
-                        team_a_id: fixture.team_a_id,
-                        team_b_id: fixture.team_b_id
-                    })
-                    .eq("id", fixture.id);
-                if (error) throw error;
-            }
-
-            await loadData();
-            setSectionManagerMessage(
-                "Entries swapped and sectional fixtures regenerated. Existing dates and rink bookings were retained; rerun rink allocation to refresh team rink-repeat optimisation."
+            await regenerateSavedSectionFixtures(
+                new Map([[sectionA.id, nextA], [sectionB.id, nextB]]),
+                [
+                    { id: entryA.section_team_id, section_id: sectionB.id },
+                    { id: entryB.section_team_id, section_id: sectionA.id }
+                ]
             );
-            setSwapTeamA("");
-            setSwapTeamB("");
+            await loadData();
+            setSectionManagerMessage("Entries swapped and sectional fixtures synchronized in one database transaction. Existing match IDs and retained rink bookings were preserved.");
+            setSwapTeamA(""); setSwapTeamB("");
         } catch (error) {
             console.error("Unable to swap section entries:", error);
-
-            // Best-effort rollback if a database update fails part-way through.
-            for (const membership of oldMemberships) {
-                await supabase.from("competition_section_teams")
-                    .update({ section_id: membership.section_id })
-                    .eq("id", membership.id);
-            }
-            for (const fixture of originalFixtureRows) {
-                await supabase.from("competition_matches")
-                    .update({
-                        team_a_id: fixture.team_a_id,
-                        team_b_id: fixture.team_b_id
-                    })
-                    .eq("id", fixture.id);
-            }
-
             await loadData();
-            alert(`Unable to swap section entries. The original draw has been restored where possible.\n\n${error.message}`);
+            alert(`Unable to swap entries. The database transaction was rolled back; no partial change was committed.\n\n${error.message}`);
         } finally {
             setSavingSectionSwap(false);
         }
@@ -5168,7 +5101,7 @@ function CompetitionWorkspace() {
                             <div className="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
                                 <div>
                                     <strong><i className="bi bi-arrow-left-right me-2"></i>Manage Section Entries</strong>
-                                    <div className="small text-muted mt-1">Swap entries, move an entry without a swap, or withdraw an entry before scoring starts. Singles move individually; Pairs, Trips and Fours move as complete teams.</div>
+                                    <div className="small text-muted mt-1">Swap or move entries, withdraw Singles entries or replace a player before scoring starts. Pairs, Trips and Fours retain their team identity when an individual player is replaced.</div>
                                 </div>
                                 <button type="button" className="btn btn-outline-primary btn-sm" onClick={() => setShowSectionManager(value => !value)}>
                                     {showSectionManager ? "Close" : "Manage Sections"}
@@ -5176,15 +5109,86 @@ function CompetitionWorkspace() {
                             </div>
                             {showSectionManager && <div className="card-body">
                                 <div className="alert alert-warning py-2 small">
-                                    Entry changes are available only before scoring starts. BowlPoint regenerates sectional opponents while preserving round dates and fixture IDs. Review and rerun rink allocation afterwards to refresh team rink-repeat optimisation.
+                                    Entry changes are available only before scoring starts. Select any entry in the section and replace its player; Singles entries do not need to be withdrawn first. Team identity is retained for Pairs, Trips and Fours. BowlPoint preserves round dates and fixture IDs. Review and rerun rink allocation afterwards to refresh team rink-repeat optimisation.
                                 </div>
                                 {sectionManagerMessage && <div className="alert alert-success py-2">{sectionManagerMessage}</div>}
                                 <div className="btn-group btn-group-sm mb-3" role="group" aria-label="Section entry action">
                                     <button type="button" className={`btn ${sectionEntryAction === "swap" ? "btn-primary" : "btn-outline-primary"}`} onClick={() => setSectionEntryAction("swap")}>Swap Entries</button>
                                     <button type="button" className={`btn ${sectionEntryAction === "move" ? "btn-primary" : "btn-outline-primary"}`} onClick={() => { setSectionEntryAction("move"); setSwapTeamB(""); }}>Move Entry</button>
                                     <button type="button" className={`btn ${sectionEntryAction === "withdraw" ? "btn-primary" : "btn-outline-primary"}`} onClick={() => { setSectionEntryAction("withdraw"); setWithdrawSectionId(""); setWithdrawTeamId(""); }}>Withdraw Entry</button>
+                                    <button type="button" className={`btn ${sectionEntryAction === "replacement" ? "btn-primary" : "btn-outline-primary"}`} onClick={() => { setSectionEntryAction("replacement"); setReplacementSectionId(""); setReplacementTeamId(""); setReplacementPlayerId(""); setReplacementPosition(""); }}>Add Replacement</button>
                                 </div>
-                                {sectionEntryAction === "withdraw" ? (
+                                {sectionEntryAction === "replacement" ? (
+                                    <>
+                                        <div className="row g-3 align-items-end">
+                                            <div className="col-md-4">
+                                                <label className="form-label fw-semibold">Section</label>
+                                                <select className="form-select" value={replacementSectionId} onChange={event => { setReplacementSectionId(event.target.value); setReplacementTeamId(""); setReplacementPlayerId(""); setReplacementPosition(""); }} disabled={hasCompetitionScoringStarted()}>
+                                                    <option value="">Choose section</option>
+                                                    {confirmedDraw.sections.map(section => <option key={section.id} value={section.id}>{section.section_name}</option>)}
+                                                </select>
+                                            </div>
+                                            <div className="col-md-4">
+                                                <label className="form-label fw-semibold">{competition.format === "singles" ? "Player to replace" : "Team containing player to replace"}</label>
+                                                <select className="form-select" value={replacementTeamId} onChange={event => { setReplacementTeamId(event.target.value); setReplacementPlayerId(""); setReplacementPosition(""); }} disabled={!replacementSectionId || hasCompetitionScoringStarted()}>
+                                                    <option value="">Choose entry</option>
+                                                    {((confirmedDraw.sections.find(section => section.id === replacementSectionId)?.allTeams)
+                                                        || confirmedDraw.sections.find(section => section.id === replacementSectionId)?.teams || []).filter(entry => {
+                                                        const teamId = entry.competition_team_id || entry.id;
+                                                        const entryTeam = teams.find(team => team.id === teamId);
+                                                        return ["active", "withdrawn"].includes(entryTeam?.status);
+                                                    }).map(entry => {
+                                                        const teamId = entry.competition_team_id || entry.id;
+                                                        const fullTeam = teams.find(team => team.id === teamId) || entry;
+                                                        return <option key={teamId} value={teamId}>{getTeamBaseName(fullTeam)} — {fullTeam.clubs?.name || "Club not set"}</option>;
+                                                    })}
+                                                </select>
+                                            </div>
+                                            {competition.format !== "singles" && <div className="col-md-4">
+                                                <label className="form-label fw-semibold">Player position to replace</label>
+                                                <select className="form-select" value={replacementPosition} onChange={event => setReplacementPosition(event.target.value)} disabled={!replacementTeamId || hasCompetitionScoringStarted()}>
+                                                    <option value="">Choose position</option>
+                                                    {getPositions(competition.format).map(position => <option key={position.key} value={position.key}>{position.label}</option>)}
+                                                </select>
+                                            </div>}
+                                        </div>
+                                        {replacementTeamId && (() => {
+                                            const selectedTeam = teams.find(team => team.id === replacementTeamId);
+                                            const selectedClubId = selectedTeam?.club_id;
+                                            const positionKey = competition.format === "singles" ? "player" : replacementPosition;
+                                            const currentRosterRow = (selectedTeam?.competition_team_players || []).find(row => row.position === positionKey);
+                                            const currentPlayerIds = new Set(teams.flatMap(team => (team.competition_team_players || []).filter(row => !(team.id === replacementTeamId && row.id === currentRosterRow?.id)).map(row => String(row.player_id))));
+                                            const eligiblePlayers = players.filter(player => (String(player.club_id || "") === String(selectedClubId) || String(player.second_club_id || "") === String(selectedClubId)) && !currentPlayerIds.has(String(player.id)) && String(player.id) !== String(currentRosterRow?.player_id || ""));
+                                            const filteredPlayers = eligiblePlayers.filter(player => `${playerName(player)} ${player.bsa_number || ""}`.toLowerCase().includes(replacementSearch.toLowerCase()));
+                                            return <div className="border rounded p-3 mt-3">
+                                                <div className="small text-muted mb-2">Replacement must belong to {selectedTeam?.clubs?.name || "the same club"}. Players already entered elsewhere in this competition are excluded.</div>
+                                                <div className="btn-group mb-3" role="group">
+                                                    <button type="button" className={`btn btn-sm ${replacementPlayerMode === "existing" ? "btn-primary" : "btn-outline-primary"}`} onClick={() => setReplacementPlayerMode("existing")}>Existing player</button>
+                                                    <button type="button" className={`btn btn-sm ${replacementPlayerMode === "new" ? "btn-primary" : "btn-outline-primary"}`} onClick={() => setReplacementPlayerMode("new")}>Create new player</button>
+                                                </div>
+                                                {replacementPlayerMode === "existing" ? <>
+                                                    <label className="form-label fw-semibold">Search club players</label>
+                                                    <input className="form-control mb-2" value={replacementSearch} onChange={event => setReplacementSearch(event.target.value)} placeholder="Search by player name or BSA number" />
+                                                    <select className="form-select" value={replacementPlayerId} onChange={event => setReplacementPlayerId(event.target.value)} disabled={competition.format !== "singles" && !replacementPosition}>
+                                                        <option value="">Choose replacement player</option>
+                                                        {filteredPlayers.map(player => <option key={player.id} value={player.id}>{player.bsa_number ? `${player.bsa_number} — ` : ""}{playerName(player)}</option>)}
+                                                    </select>
+                                                    {!filteredPlayers.length && <div className="small text-muted mt-2">No eligible existing players match this search.</div>}
+                                                </> : <>
+                                                    <div className="row g-2">
+                                                        <div className="col-md-6"><label className="form-label">First name *</label><input className="form-control" value={replacementNewPlayer.first_name} onChange={event => setReplacementNewPlayer(prev => ({ ...prev, first_name: event.target.value }))} /></div>
+                                                        <div className="col-md-6"><label className="form-label">Surname *</label><input className="form-control" value={replacementNewPlayer.last_name} onChange={event => setReplacementNewPlayer(prev => ({ ...prev, last_name: event.target.value }))} /></div>
+                                                        <div className="col-md-6"><label className="form-label">Nickname</label><input className="form-control" value={replacementNewPlayer.nickname} onChange={event => setReplacementNewPlayer(prev => ({ ...prev, nickname: event.target.value }))} /></div>
+                                                        <div className="col-md-6"><label className="form-label">BSA number</label><input className="form-control" value={replacementNewPlayer.bsa_number} onChange={event => setReplacementNewPlayer(prev => ({ ...prev, bsa_number: event.target.value }))} /></div>
+                                                    </div>
+                                                    <div className="small text-muted mt-2">The new player will be added to the master player database under {selectedTeam?.clubs?.name || "the team's club"}.</div>
+                                                </>}
+                                                <div className="d-flex justify-content-end mt-3"><button type="button" className="btn btn-primary" onClick={handleAddReplacement} disabled={savingSectionSwap || hasCompetitionScoringStarted() || (competition.format !== "singles" && !replacementPosition) || (replacementPlayerMode === "existing" && !replacementPlayerId) || (replacementPlayerMode === "new" && (!replacementNewPlayer.first_name.trim() || !replacementNewPlayer.last_name.trim()))}>{savingSectionSwap ? "Adding replacement…" : "Replace Withdrawn Entry"}</button></div>
+                                            </div>;
+                                        })()}
+                                        {hasCompetitionScoringStarted() && <div className="text-danger small mt-2">Scoring has started. Replacements are no longer allowed.</div>}
+                                    </>
+                                ) : sectionEntryAction === "withdraw" ? (
                                     <>
                                         <div className="alert alert-warning py-2 small">
                                             Withdrawals are only permitted before scoring starts. The entry will be removed from the active draw, and the affected section's fixtures will be regenerated. Other sections and their bookings will be left unchanged.
