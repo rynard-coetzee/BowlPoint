@@ -34,6 +34,9 @@ export default function FacilityAllocation() {
   const [clubsDropdownOpen, setClubsDropdownOpen] = useState(false);
   const [bookings, setBookings] = useState([]);
   const [allocations, setAllocations] = useState([]);
+  const [activeStage, setActiveStage] = useState("sectional");
+  const [playoffVenueIds, setPlayoffVenueIds] = useState({});
+  const [savingPlayoffVenues, setSavingPlayoffVenues] = useState(false);
   const [loading, setLoading] = useState(true);
   const [allocating, setAllocating] = useState(false);
   const [allocationAttempted, setAllocationAttempted] = useState(false);
@@ -44,18 +47,19 @@ export default function FacilityAllocation() {
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const [competitionRes, roundsRes, matchesRes, teamsRes, greensRes, bookingsRes, clubsRes, sectionsRes, sectionVenuesRes] = await Promise.all([
+      const [competitionRes, roundsRes, matchesRes, teamsRes, greensRes, bookingsRes, clubsRes, sectionsRes, sectionVenuesRes, playoffVenuesRes] = await Promise.all([
         supabase.from("competitions").select("id,name").eq("id", competitionId).maybeSingle(),
         supabase.from("competition_rounds").select("id,round_number,round_name,competition_day_id,competition_days(id,playing_date,name,venue_club_id,clubs(id,name,short_name))").eq("competition_id", competitionId).order("round_number"),
         supabase.from("competition_matches").select("id,round_id,section_id,match_number,team_a_id,team_b_id,completed").eq("competition_id", competitionId).order("match_number"),
         supabase.from("competition_teams").select("id,team_number,team_name,club_id,status,clubs(id,name,short_name)").eq("competition_id", competitionId),
         supabase.from("club_greens").select("id,name,club_id,active,allows_direction_change,clubs(id,name,short_name),green_rinks(id,label,active)").eq("active", true).order("name"),
-        supabase.from("facility_bookings").select("id,competition_id,match_id,green_id,rink_id,playing_date,session_name,starts_at,ends_at,direction,status").neq("status", "cancelled"),
+        supabase.from("facility_bookings").select("id,competition_id,match_id,green_id,rink_id,playing_date,session_name,starts_at,ends_at,direction,status,notes,created_by"),
         supabase.from("clubs").select("id,name,short_name").order("name"),
         supabase.from("competition_sections").select("id,competition_id,section_number,section_name").eq("competition_id", competitionId).order("section_number"),
-        supabase.from("competition_section_venues").select("section_id,club_id,green_id").eq("competition_id", competitionId)
+        supabase.from("competition_section_venues").select("section_id,club_id,green_id").eq("competition_id", competitionId),
+        supabase.from("competition_playoff_venues").select("round_id,club_id,green_id").eq("competition_id", competitionId)
       ]);
-      for (const result of [roundsRes, matchesRes, teamsRes, greensRes, bookingsRes, clubsRes, sectionsRes, sectionVenuesRes]) if (result.error) throw result.error;
+      for (const result of [roundsRes, matchesRes, teamsRes, greensRes, bookingsRes, clubsRes, sectionsRes, sectionVenuesRes, playoffVenuesRes]) if (result.error) throw result.error;
 
       const rawBookings = bookingsRes.data || [];
       const bookingMatchIds = [...new Set(rawBookings.map(booking => booking.match_id).filter(Boolean))];
@@ -98,6 +102,7 @@ export default function FacilityAllocation() {
       setSections(sectionsRes.data || []);
       setSectionVenueIds(Object.fromEntries((sectionVenuesRes.data || []).map(row => [row.section_id, row.club_id])));
       setSectionGreenIds(Object.fromEntries((sectionVenuesRes.data || []).filter(row => row.green_id).map(row => [row.section_id, row.green_id])));
+      setPlayoffVenueIds(Object.fromEntries((playoffVenuesRes.data || []).map(row => [row.round_id, row.club_id])));
       const teamMap = new Map(loadedTeams.map(t => [t.id, t]));
       const roundRows = (roundsRes.data || []).map(r => ({ ...r, day: r.competition_days }));
       const roundMap = new Map(roundRows.map(r => [r.id, r]));
@@ -167,16 +172,20 @@ export default function FacilityAllocation() {
     [validMatches]
   );
   const missingScheduleCount = validMatches.length - scheduledMatches.length;
-  const ignoredStaleMatchCount = matches.length - validMatches.length;
-  const greenById = useMemo(() => new Map(greens.map(g => [g.id, g])), [greens]);
-  const allocationByMatch = useMemo(() => new Map(allocations.map(a => [a.match_id, a])), [allocations]);
-  const eligibleClubs = useMemo(() => clubs.filter(c => greens.some(g => g.club_id === c.id)), [clubs, greens]);
-  const selectedGreens = useMemo(() => greens.filter(g => selectedClubIds.includes(g.club_id)), [greens, selectedClubIds]);
   const isSectionalFixture = row => Boolean(
     row.section_id &&
     sections.some(section => section.id === row.section_id) &&
     !/playoff|quarter.?final|semi.?final|grand.?final|final/i.test(row.round_name || "")
   );
+  const sectionalScheduledMatches = useMemo(() => scheduledMatches.filter(row => isSectionalFixture(row)), [scheduledMatches, sections]);
+  const playoffScheduledMatches = useMemo(() => scheduledMatches.filter(row => !isSectionalFixture(row)), [scheduledMatches, sections]);
+  const sectionalMatchIds = useMemo(() => new Set(scheduledMatches.filter(row => isSectionalFixture(row)).map(row => row.id)), [scheduledMatches, sections]);
+  const playoffMatchIds = useMemo(() => new Set(scheduledMatches.filter(row => !isSectionalFixture(row)).map(row => row.id)), [scheduledMatches, sections]);
+  const ignoredStaleMatchCount = matches.length - validMatches.length;
+  const greenById = useMemo(() => new Map(greens.map(g => [g.id, g])), [greens]);
+  const allocationByMatch = useMemo(() => new Map(allocations.map(a => [a.match_id, a])), [allocations]);
+  const eligibleClubs = useMemo(() => clubs.filter(c => greens.some(g => g.club_id === c.id)), [clubs, greens]);
+  const selectedGreens = useMemo(() => greens.filter(g => selectedClubIds.includes(g.club_id)), [greens, selectedClubIds]);
 
   // Pin each section to ONE green for the entire sectional stage.
   // Green assignment is based on simultaneous match demand, not section count:
@@ -240,7 +249,7 @@ export default function FacilityAllocation() {
       if (direction === 2 && !green.allows_direction_change) return 0;
 
       const external = bookings.filter(booking =>
-        booking.competition_id !== competitionId &&
+        (booking.competition_id !== competitionId || playoffMatchIds.has(booking.match_id)) &&
         booking.status !== "cancelled" &&
         booking.green_id === green.id &&
         overlaps(startsAt, endsAt, booking.starts_at, booking.ends_at)
@@ -618,7 +627,7 @@ export default function FacilityAllocation() {
       const green = greens.find(item => item.id === greenId);
       const usableRinks = green && (Number(direction) !== 2 || green.allows_direction_change)
         ? green.rinks.filter(rink => !bookings.some(b =>
-            b.competition_id !== competitionId &&
+            (b.competition_id !== competitionId || playoffMatchIds.has(b.match_id)) &&
             b.status !== "cancelled" &&
             b.green_id === green.id &&
             overlaps(start, end, b.starts_at, b.ends_at) &&
@@ -684,12 +693,14 @@ export default function FacilityAllocation() {
         end: old.ends_at ? new Date(old.ends_at).toLocaleTimeString("en-GB", { timeZone: "Africa/Johannesburg", hour12: false }) : fallbackSession.end,
         direction: Number(old.direction) || fallbackSession.direction,
       } : fallbackSession;
+      const isPlayoff = !isSectionalFixture({ section_id: m.section_id, round_name: m.round.round_name || "" });
+      const savedPlayoffClubId = isPlayoff ? playoffVenueIds[m.round_id] : null;
       return {
         match_id: m.id, round_id: m.round_id, section_id: m.section_id || null, round_number: m.round.round_number,
         match_number: m.match_number, round_name: m.round.round_name || "", team_a_id: m.team_a_id, team_b_id: m.team_b_id,
         team_a_label: labelTeam(m.teamA), team_b_label: labelTeam(m.teamB),
-        playing_date: date, venue_club_id: oldGreen?.club_id || m.round.day?.venue_club_id || "",
-        venue_name: oldGreen?.clubs?.name || m.round.day?.clubs?.name || "Not yet allocated",
+        playing_date: date, venue_club_id: savedPlayoffClubId || oldGreen?.club_id || m.round.day?.venue_club_id || "",
+        venue_name: clubs.find(club => club.id === savedPlayoffClubId)?.name || oldGreen?.clubs?.name || m.round.day?.clubs?.name || "Not yet allocated",
         session_name: session.name,
         starts_at: old?.starts_at || localIso(date, session.start),
         ends_at: old?.ends_at || localIso(date, session.end),
@@ -699,20 +710,34 @@ export default function FacilityAllocation() {
     });
   };
 
+  const savePlayoffVenues = async () => {
+    setSavingPlayoffVenues(true); setError(""); setNotice("");
+    try {
+      const playoffRounds = rounds.filter(round => /playoff|quarter.?final|semi.?final|grand.?final|final/i.test(round.round_name || ""));
+      const payload = playoffRounds.filter(round => playoffVenueIds[round.id]).map(round => ({ competition_id: competitionId, round_id: round.id, club_id: playoffVenueIds[round.id] }));
+      if (payload.length) {
+        const { error: upsertError } = await supabase.from("competition_playoff_venues").upsert(payload, { onConflict: "competition_id,round_id" });
+        if (upsertError) throw upsertError;
+      }
+      setNotice("Playoff venues saved. Existing rink bookings have not been changed.");
+    } catch (e) { setError(`Unable to save playoff venues: ${e.message}`); }
+    finally { setSavingPlayoffVenues(false); }
+  };
+
   const runAutoAllocation = async () => {
     setAllocationAttempted(true);
     setAllocating(true); setError(""); setNotice("");
     try {
-      const rows = buildInitialRows().sort((a, b) => `${a.playing_date}:${a.starts_at}:${a.round_number}:${a.match_number}`.localeCompare(`${b.playing_date}:${b.starts_at}:${b.round_number}:${b.match_number}`));
+      const rows = buildInitialRows().filter(row => activeStage === "sectional" ? isSectionalFixture(row) : !isSectionalFixture(row)).sort((a, b) => `${a.playing_date}:${a.starts_at}:${a.round_number}:${a.match_number}`.localeCompare(`${b.playing_date}:${b.starts_at}:${b.round_number}:${b.match_number}`));
       if (!rows.length) throw new Error("No fixtures have both teams and a saved playing date. Confirm the draw and save the playing dates first.");
       if (!selectedClubIds.length) throw new Error("Select the clubs that are permitted to host this competition before allocating rinks.");
       const isSectionalRow = isSectionalFixture;
-      const sectionGreenMap = buildSectionGreenMap(sectionVenueIds, sectionGreenIds);
-      if (Object.keys(sectionGreenMap).some(sectionId => sectionGreenIds[sectionId] !== sectionGreenMap[sectionId])) {
+      const sectionGreenMap = activeStage === "sectional" ? buildSectionGreenMap(sectionVenueIds, sectionGreenIds) : {};
+      if (activeStage === "sectional" && Object.keys(sectionGreenMap).some(sectionId => sectionGreenIds[sectionId] !== sectionGreenMap[sectionId])) {
         await saveSectionVenues(sectionVenueIds, sectionGreenMap);
         setSectionGreenIds(sectionGreenMap);
       }
-      const externalBookings = bookings.filter(b => b.status !== "cancelled" && b.competition_id !== competitionId);
+      const externalBookings = bookings.filter(b => b.status !== "cancelled" && (b.competition_id !== competitionId || (activeStage === "sectional" ? playoffMatchIds.has(b.match_id) : sectionalMatchIds.has(b.match_id))));
       const teamRinkHistory = new Map();
       const planned = [];
       for (const row of rows) {
@@ -721,7 +746,7 @@ export default function FacilityAllocation() {
         // Keep the existing section venue. For playoffs/non-sectional matches, use
         // the current booking's venue or the saved round-day venue. Never randomize.
         const assignedSectionClub = isSectionalRow(row) ? sectionVenueIds[row.section_id] : null;
-        const fixedVenueClub = assignedSectionClub || row.venue_club_id || null;
+        const fixedVenueClub = assignedSectionClub || (activeStage === "playoff" ? playoffVenueIds[row.round_id] : null) || row.venue_club_id || null;
         if (isSectionalRow(row) && !assignedSectionClub) {
           const section = sections.find(item => item.id === row.section_id);
           throw new Error(`No saved host venue is assigned to ${section?.section_name || "a section"}. Set the section venue first; rink-only allocation will not change it.`);
@@ -777,7 +802,7 @@ export default function FacilityAllocation() {
       }
       setAllocations(planned);
       const repeats = planned.filter(p => p.repeat_warning).length;
-      setNotice(`Prepared ${planned.length} rink-only allocations. Section venues and saved fixture dates/times are preserved. ${repeats ? `${repeats} rink repeat(s) remain because of capacity or availability; review before saving.` : "No team rink repeats were found."} Review the assignments before saving.`);
+      setNotice(`Prepared ${planned.length} ${activeStage} rink-only allocations. Existing bookings for the other stage are untouched. Section venues and saved fixture dates/times are preserved. ${repeats ? `${repeats} rink repeat(s) remain because of capacity or availability; review before saving.` : "No team rink repeats were found."} Review the assignments before saving.`);
     } catch (e) { setError(e.message); }
     finally { setAllocating(false); }
   };
@@ -811,15 +836,15 @@ export default function FacilityAllocation() {
           direction: Number(a.direction), status: "confirmed", notes: a.notes || null,
         };
       });
-      // A database function replaces this competition's allocations for the selected
-      // fixtures in one transaction. If any cross-competition conflict is detected,
-      // the transaction rolls back and the existing bookings remain intact.
-      const { error: saveError } = await supabase.rpc("save_competition_facility_bookings", {
+      // Stage-scoped save: only match IDs in this stage's payload are replaced.
+      // Existing bookings for the other stage and unrelated matches retain their
+      // original database rows and IDs.
+      const { error: saveError } = await supabase.rpc("save_competition_facility_bookings_for_matches", {
         p_competition_id: competitionId,
         p_bookings: payloads,
       });
       if (saveError) throw saveError;
-      setNotice("Rink allocations saved. All bookings were validated against every other BowlPoint competition.");
+      setNotice(`${activeStage === "sectional" ? "Sectional" : "Playoff"} rink allocations saved. Only the fixtures in this allocation were replaced; all other existing bookings were left untouched.`);
       await load();
       setAllocations([]);
     } catch (e) { setError(`Unable to save rink allocations. No partial replacement was committed. ${e.message}`); }
@@ -867,6 +892,12 @@ export default function FacilityAllocation() {
       {ignoredStaleMatchCount} fixture(s) were ignored because one or both assigned teams are missing or are no longer active in this competition. They will not be included in rink allocation.
     </div>}
     {loading ? <div className="text-muted">Loading competition fixtures and facilities…</div> : <>
+      <div className="btn-group mb-4" role="group" aria-label="Allocation stage">
+        <button type="button" className={`btn ${activeStage === "sectional" ? "btn-primary" : "btn-outline-primary"}`} onClick={() => { if (allocations.length && !window.confirm("Discard the unsaved allocation draft and switch stages? Saved bookings will not be changed.")) return; setActiveStage("sectional"); setAllocations([]); setAllocationAttempted(false); setError(""); setNotice(""); }}>Sectional Allocation ({sectionalScheduledMatches.length})</button>
+        <button type="button" className={`btn ${activeStage === "playoff" ? "btn-primary" : "btn-outline-primary"}`} onClick={() => { if (allocations.length && !window.confirm("Discard the unsaved allocation draft and switch stages? Saved bookings will not be changed.")) return; setActiveStage("playoff"); setAllocations([]); setAllocationAttempted(false); setError(""); setNotice(""); }}>Playoff Allocation ({playoffScheduledMatches.length})</button>
+      </div>
+      <div className="alert alert-info py-2">Changing tabs does not alter saved bookings. Saving an allocation only replaces bookings for the fixtures shown in the selected stage.</div>
+      {activeStage === "sectional" ? <>
       <div className="card border-0 shadow-sm mb-4"><div className="card-body">
         <div className="d-flex flex-wrap align-items-start justify-content-between gap-3">
           <div>
@@ -993,11 +1024,12 @@ export default function FacilityAllocation() {
           {!venueProposalReady && Object.keys(sectionVenueIds).length > 0 && <div className="small text-muted mt-3">Saved host clubs remain fixed during rink allocation. To change them, generate and approve a new host-club proposal.</div>}
         </div>
       </div>}
+      </> : <div className="card border-0 shadow-sm mb-4"><div className="card-header bg-white"><h5 className="mb-1">Playoff Round Venues</h5><div className="small text-muted">Choose a venue independently for each playoff round. This does not change sectional host clubs or existing rink bookings.</div></div><div className="card-body"><div className="row g-3">{rounds.filter(round => /playoff|quarter.?final|semi.?final|grand.?final|final/i.test(round.round_name || "")).map(round => <div className="col-md-6 col-xl-4" key={round.id}><label className="form-label fw-semibold">{round.round_name}</label><select className="form-select" value={playoffVenueIds[round.id] || ""} onChange={e => setPlayoffVenueIds(current => ({ ...current, [round.id]: e.target.value }))}><option value="">Use round's scheduled venue</option>{eligibleClubs.map(club => <option key={club.id} value={club.id}>{club.name}</option>)}</select></div>)}</div><button type="button" className="btn btn-outline-primary mt-3" onClick={savePlayoffVenues} disabled={savingPlayoffVenues}>{savingPlayoffVenues ? "Saving venues…" : "Save Playoff Venues"}</button></div></div>}
       <div className="card border-0 shadow-sm mb-4"><div className="card-body">
         <div className="row g-3 align-items-center">
-          <div className="col-md"><div className="fw-semibold">Fixtures ready for allocation</div><div className="text-muted small">Only matches with both teams and a saved date are allocated. Existing fixture dates/times and section venues are retained; only greens and rinks are regenerated.</div></div>
-          <div className="col-md-auto"><span className="badge bg-primary me-2">{scheduledMatches.length} ready</span>{missingScheduleCount > 0 && <span className="badge bg-warning text-dark">{missingScheduleCount} need dates</span>}</div>
-          <div className="col-md-auto"><button className="btn btn-primary" onClick={runAutoAllocation} disabled={allocating || !scheduledMatches.length || !selectedClubIds.length || sections.some(section => !sectionVenueIds[section.id])}>{allocating ? <><span className="spinner-border spinner-border-sm me-2"/>Allocating…</> : <><i className="bi bi-magic me-2"/>Automatically Allocate Rinks</>}</button></div>
+          <div className="col-md"><div className="fw-semibold">Fixtures ready for allocation</div><div className="text-muted small">Only matches in the selected stage with both teams and a saved date are allocated. Existing fixture dates/times and saved venues are retained; only greens and rinks are regenerated.</div></div>
+          <div className="col-md-auto"><span className="badge bg-primary me-2">{(activeStage === "sectional" ? sectionalScheduledMatches : playoffScheduledMatches).length} ready</span>{missingScheduleCount > 0 && <span className="badge bg-warning text-dark">{missingScheduleCount} need dates</span>}</div>
+          <div className="col-md-auto"><button className="btn btn-primary" onClick={runAutoAllocation} disabled={allocating || !(activeStage === "sectional" ? sectionalScheduledMatches : playoffScheduledMatches).length || !selectedClubIds.length || (activeStage === "sectional" && sections.some(section => !sectionVenueIds[section.id]))}>{allocating ? <><span className="spinner-border spinner-border-sm me-2"/>Allocating…</> : <><i className="bi bi-magic me-2"/>Automatically Allocate Rinks</>}</button></div>
         </div>
       </div></div>
       {rowsToShow.length > 0 && <div className="card border-0 shadow-sm"><div className="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2"><div><h5 className="mb-1">Review Rink Allocations</h5><div className="small text-muted">Change any green, rink or direction before saving. Each green supports six lanes per session: Direction 1 lengthwise in both morning sessions and Direction 2 crosswise in both afternoon sessions.</div></div><button className="btn btn-success" onClick={saveAllocations} disabled={saving}>{saving ? "Saving…" : "Save Allocations"}</button></div>
@@ -1015,7 +1047,7 @@ export default function FacilityAllocation() {
               <td>{a.repeat_warning ? <span className="badge bg-warning text-dark">Rink repeat</span> : <span className="badge bg-success">No repeat found</span>}</td>
             </tr>)}
           </Fragment>)}
-        </tbody></table></div><div className="card-footer bg-white small text-muted">Allocation is checked against bookings in every competition, including competitions already using the same club. Spare rinks may be shared when date, time and direction rules permit. Sections remain intact at their approved host club; playoff venue allocation remains separate.</div></div>}
+        </tbody></table></div><div className="card-footer bg-white small text-muted">Allocation is checked against bookings in every competition, including competitions already using the same club. Saving this stage does not replace bookings for the other stage.</div></div>}
       {!rowsToShow.length && <div className="alert alert-secondary">Generate an automatic allocation to review and save rink assignments for this competition.</div>}
     </>}
   </div>;
