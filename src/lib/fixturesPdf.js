@@ -1,3 +1,5 @@
+import { getPlayerDisplayName } from "../utils/playerDisplay";
+
 /*
  * Printable fixture export for Full Competition.
  *
@@ -47,12 +49,11 @@ function getTeamMembers(team) {
             const player = member.players;
             if (!player) return null;
 
-            const name =
-                player.display_name ||
-                [player.first_name, player.nickname ? `(${player.nickname})` : "", player.last_name]
-                    .filter(Boolean)
-                    .join(" ")
-                    .trim();
+            // Match BowlPoint's standard player display convention: use
+            // Nickname + Surname when a nickname is configured; otherwise
+            // use First name + Surname. Do not print the legal display_name
+            // ahead of the nickname, as that would show the full first name.
+            const name = getPlayerDisplayName(player);
 
             if (!name) return null;
 
