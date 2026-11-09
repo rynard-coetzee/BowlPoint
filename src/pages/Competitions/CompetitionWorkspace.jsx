@@ -63,6 +63,13 @@ function CompetitionWorkspace() {
     const [replacementPlayerId, setReplacementPlayerId] = useState("");
     const [replacementSearch, setReplacementSearch] = useState("");
     const [replacementNewPlayer, setReplacementNewPlayer] = useState({ first_name: "", last_name: "", nickname: "", bsa_number: "" });
+    const [lateEntrySectionId, setLateEntrySectionId] = useState("");
+    const [lateEntryClubId, setLateEntryClubId] = useState("");
+    const [lateEntryPlayers, setLateEntryPlayers] = useState({});
+    const [lateEntryPlayerModes, setLateEntryPlayerModes] = useState({});
+    const [lateEntryNewPlayers, setLateEntryNewPlayers] = useState({});
+    const [lateEntrySearch, setLateEntrySearch] = useState({});
+    const [savingLateEntry, setSavingLateEntry] = useState(false);
     const [sectionManagerMessage, setSectionManagerMessage] = useState("");
     const [scheduleProposal, setScheduleProposal] = useState(null);
     const [scheduleAssignments, setScheduleAssignments] = useState([]);
@@ -2018,7 +2025,160 @@ function CompetitionWorkspace() {
      * The competition team and section membership IDs remain unchanged so
      * the replacement inherits the existing draw position.
      */
-    const handleAddReplacement = async () => {
+    
+    const handleAddLateEntry = async () => {
+        if (hasCompetitionScoringStarted()) {
+            alert("A late entry cannot be added after sectional scoring has started.");
+            return;
+        }
+        const section = confirmedDraw?.sections?.find(item => item.id === lateEntrySectionId);
+        if (!section || !lateEntryClubId) {
+            alert("Choose a section and a participating club.");
+            return;
+        }
+        const participating = participatingClubs.some(item => String(item.club_id) === String(lateEntryClubId));
+        if (!participating) {
+            alert("The selected club is not registered as a participating club in this competition.");
+            return;
+        }
+        const positions = getPositions(competition.format);
+        const alreadyEntered = new Set(teams.flatMap(team => (team.competition_team_players || []).map(row => String(row.player_id))));
+        const rosterInput = [];
+        const seenExisting = new Set();
+        for (const position of positions) {
+            const mode = lateEntryPlayerModes[position.key] || "existing";
+            if (mode === "new") {
+                const person = lateEntryNewPlayers[position.key] || {};
+                if (!String(person.first_name || "").trim() || !String(person.last_name || "").trim()) {
+                    alert(`Enter the first name and surname for ${position.label}.`);
+                    return;
+                }
+                rosterInput.push({ position: position.key, position_order: position.order, new_player: {
+                    first_name: person.first_name.trim(), last_name: person.last_name.trim(),
+                    nickname: String(person.nickname || "").trim() || null,
+                    bsa_number: String(person.bsa_number || "").trim() || null
+                }});
+            } else {
+                const id = lateEntryPlayers[position.key];
+                const person = players.find(player => String(player.id) === String(id));
+                if (!person || alreadyEntered.has(String(id)) || seenExisting.has(String(id))) {
+                    alert(`Choose an eligible, unused existing player for ${position.label}.`);
+                    return;
+                }
+                if (!(String(person.club_id) === String(lateEntryClubId) || String(person.second_club_id) === String(lateEntryClubId))) {
+                    alert(`The selected ${position.label.toLowerCase()} must belong to the selected club.`);
+                    return;
+                }
+                seenExisting.add(String(id));
+                rosterInput.push({ position: position.key, position_order: position.order, player_id: id });
+            }
+        }
+
+        const newTeamId = crypto.randomUUID();
+        const newTeamNumber = Math.max(0, ...teams.map(team => Number(team.team_number) || 0)) + 1;
+        const selectedClub = participatingClubs.find(item => String(item.club_id) === String(lateEntryClubId));
+        const club = selectedClub?.clubs || clubs.find(item => String(item.id) === String(lateEntryClubId));
+        const provisionalTeam = {
+            id: newTeamId,
+            team_number: newTeamNumber,
+            team_name: null,
+            club_id: lateEntryClubId,
+            clubs: club || null,
+            status: "active"
+        };
+        const newEntry = { id: newTeamId, competition_team_id: newTeamId, ...provisionalTeam };
+        const nextEntries = [...(section.teams || []), newEntry];
+        const drawTeams = nextEntries.map(entry => {
+            const teamId = entry.competition_team_id || entry.id;
+            const fullTeam = teamId === newTeamId ? provisionalTeam : (teams.find(team => team.id === teamId) || entry);
+            return {
+                id: teamId,
+                name: getTeamBaseName(fullTeam),
+                clubId: fullTeam.club_id || null,
+                clubName: fullTeam.clubs?.name || ""
+            };
+        });
+
+        let generatedRounds;
+        try {
+            generatedRounds = createRoundRobinRounds(drawTeams);
+            validateRoundRobin(drawTeams, generatedRounds);
+        } catch (error) {
+            alert(`The late-entry draw could not be generated: ${error.message}`);
+            return;
+        }
+        const maxSavedRound = Math.max(0, ...(confirmedDraw.rounds || []).map(round => Number(round.round_number) || 0));
+        if (generatedRounds.length > maxSavedRound) {
+            alert(`Adding this entry requires ${generatedRounds.length} sectional rounds, but the competition currently has only ${maxSavedRound} saved rounds. Add the missing competition rounds first, then try again. No changes have been made.`);
+            return;
+        }
+
+        const fixtureUpdates = [];
+        const fixtureInserts = [];
+        const obsoleteIds = new Set();
+        const activeIds = new Set(drawTeams.map(team => String(team.id)));
+        const sectionMatches = (confirmedDraw.matches || []).filter(match => match.section_id === section.id);
+        for (const generatedRound of generatedRounds) {
+            const roundRecord = confirmedDraw.rounds.find(round => Number(round.round_number) === Number(generatedRound.number));
+            if (!roundRecord) {
+                alert(`Saved Round ${generatedRound.number} is missing. No changes have been made.`);
+                return;
+            }
+            const existing = sectionMatches.filter(match => match.round_id === roundRecord.id)
+                .sort((a,b) => Number(a.match_number)-Number(b.match_number));
+            const matchBase = Math.max(0, ...(confirmedDraw.matches || [])
+                .filter(match => match.round_id === roundRecord.id)
+                .map(match => Number(match.match_number) || 0));
+            generatedRound.matches.forEach((match, index) => {
+                if (!activeIds.has(String(match.teamAId)) || !activeIds.has(String(match.teamBId)) || String(match.teamAId) === String(match.teamBId)) {
+                    throw new Error(`Invalid opponent pairing in ${section.section_name}, round ${generatedRound.number}.`);
+                }
+                if (existing[index]) {
+                    fixtureUpdates.push({ id: existing[index].id, section_id: section.id, round_id: roundRecord.id, team_a_id: match.teamAId, team_b_id: match.teamBId });
+                } else {
+                    fixtureInserts.push({ section_id: section.id, round_id: roundRecord.id, match_number: matchBase + (index - existing.length) + 1, team_a_id: match.teamAId, team_b_id: match.teamBId });
+                }
+            });
+            existing.slice(generatedRound.matches.length).forEach(match => obsoleteIds.add(match.id));
+        }
+        sectionMatches.forEach(match => {
+            const roundNumber = confirmedDraw.rounds.find(round => round.id === match.round_id)?.round_number;
+            if (Number(roundNumber) > generatedRounds.length) obsoleteIds.add(match.id);
+        });
+
+        if (!window.confirm(`Add this ${competition.format} entry to ${section.section_name} for ${club?.name || "the selected club"} and regenerate only this section's fixtures?\n\nExisting fixture IDs and bookings will be retained wherever possible. Other sections and playoff fixtures will not be changed.`)) return;
+        setSavingLateEntry(true);
+        setSectionManagerMessage("");
+        try {
+            const roster = rosterInput;
+            const { data, error } = await supabase.rpc("add_late_competition_entry_atomic", {
+                p_competition_id: competitionId,
+                p_new_team_id: newTeamId,
+                p_section_id: section.id,
+                p_club_id: lateEntryClubId,
+                p_roster: roster,
+                p_fixture_updates: fixtureUpdates,
+                p_fixture_inserts: fixtureInserts,
+                p_obsolete_match_ids: [...obsoleteIds]
+            });
+            if (error) throw error;
+            if (!data?.success) throw new Error("Supabase did not confirm the late entry.");
+            await loadData();
+            setLateEntryPlayers({});
+            setLateEntrySearch({});
+            setLateEntrySectionId("");
+            setLateEntryClubId("");
+            setSectionManagerMessage(`Late entry added successfully as Team ${data.team_number}. Only ${section.section_name} was redrawn.`);
+        } catch (error) {
+            console.error("Unable to add late entry:", error);
+            await loadData();
+            alert(`Unable to add late entry. The database transaction was rolled back; no partial entry or draw change was committed.\n\n${error.message}`);
+        } finally {
+            setSavingLateEntry(false);
+        }
+    };
+
+const handleAddReplacement = async () => {
         if (hasCompetitionScoringStarted()) {
             alert("Replacements cannot be made after scoring has started.");
             return;
@@ -5117,8 +5277,72 @@ function CompetitionWorkspace() {
                                     <button type="button" className={`btn ${sectionEntryAction === "move" ? "btn-primary" : "btn-outline-primary"}`} onClick={() => { setSectionEntryAction("move"); setSwapTeamB(""); }}>Move Entry</button>
                                     <button type="button" className={`btn ${sectionEntryAction === "withdraw" ? "btn-primary" : "btn-outline-primary"}`} onClick={() => { setSectionEntryAction("withdraw"); setWithdrawSectionId(""); setWithdrawTeamId(""); }}>Withdraw Entry</button>
                                     <button type="button" className={`btn ${sectionEntryAction === "replacement" ? "btn-primary" : "btn-outline-primary"}`} onClick={() => { setSectionEntryAction("replacement"); setReplacementSectionId(""); setReplacementTeamId(""); setReplacementPlayerId(""); setReplacementPosition(""); }}>Add Replacement</button>
+                                    <button type="button" className={`btn ${sectionEntryAction === "lateEntry" ? "btn-primary" : "btn-outline-primary"}`} onClick={() => { setSectionEntryAction("lateEntry"); setLateEntrySectionId(""); setLateEntryClubId(""); setLateEntryPlayers({}); setLateEntrySearch({}); setLateEntryPlayerModes({}); setLateEntryNewPlayers({}); }}>Add Late Entry</button>
                                 </div>
-                                {sectionEntryAction === "replacement" ? (
+                                {sectionEntryAction === "lateEntry" ? (
+                                    <div className="border rounded p-3">
+                                        <div className="alert alert-info py-2 small">
+                                            Add a new entry to one section only. The club must already participate in this competition. Existing entries and other sections are not moved.
+                                        </div>
+                                        <div className="row g-3">
+                                            <div className="col-md-4">
+                                                <label className="form-label fw-semibold">Section</label>
+                                                <select className="form-select" value={lateEntrySectionId} onChange={event => { setLateEntrySectionId(event.target.value); setLateEntryPlayers({}); }} disabled={savingLateEntry || hasCompetitionScoringStarted()}>
+                                                    <option value="">Choose section</option>
+                                                    {confirmedDraw.sections.map(section => <option key={section.id} value={section.id}>{section.section_name}</option>)}
+                                                </select>
+                                            </div>
+                                            <div className="col-md-4">
+                                                <label className="form-label fw-semibold">Participating club</label>
+                                                <select className="form-select" value={lateEntryClubId} onChange={event => { setLateEntryClubId(event.target.value); setLateEntryPlayers({}); }} disabled={savingLateEntry || hasCompetitionScoringStarted()}>
+                                                    <option value="">Choose club</option>
+                                                    {participatingClubs.map(item => <option key={item.club_id} value={item.club_id}>{item.clubs?.name || clubs.find(club => club.id === item.club_id)?.name || item.club_id}</option>)}
+                                                </select>
+                                            </div>
+                                        </div>
+                                        {lateEntryClubId && <div className="row g-3 mt-1">
+                                            {getPositions(competition.format).map(position => {
+                                                const eligible = players.filter(player =>
+                                                    (String(player.club_id || "") === String(lateEntryClubId) || String(player.second_club_id || "") === String(lateEntryClubId)) &&
+                                                    !teams.some(team => (team.competition_team_players || []).some(row => String(row.player_id) === String(player.id))) &&
+                                                    `${playerName(player)} ${player.bsa_number || ""}`.toLowerCase().includes((lateEntrySearch[position.key] || "").toLowerCase())
+                                                );
+                                                const mode = lateEntryPlayerModes[position.key] || "existing";
+                                                const person = lateEntryNewPlayers[position.key] || {};
+                                                return <div className="col-12 col-lg-6" key={position.key}>
+                                                    <div className="border rounded p-3 h-100">
+                                                        <div className="d-flex align-items-center justify-content-between mb-2">
+                                                            <label className="form-label fw-semibold mb-0">{position.label}</label>
+                                                            <div className="btn-group btn-group-sm" role="group">
+                                                                <button type="button" className={`btn ${mode === "existing" ? "btn-primary" : "btn-outline-primary"}`} onClick={() => setLateEntryPlayerModes(prev => ({...prev, [position.key]: "existing"}))}>Existing player</button>
+                                                                <button type="button" className={`btn ${mode === "new" ? "btn-primary" : "btn-outline-primary"}`} onClick={() => setLateEntryPlayerModes(prev => ({...prev, [position.key]: "new"}))}>Create player</button>
+                                                            </div>
+                                                        </div>
+                                                        {mode === "existing" ? <>
+                                                            <input className="form-control mb-2" value={lateEntrySearch[position.key] || ""} onChange={event => setLateEntrySearch(prev => ({...prev, [position.key]: event.target.value}))} placeholder={`Search ${position.label.toLowerCase()} by name or BSA number`} disabled={savingLateEntry}/>
+                                                            <select className="form-select" value={lateEntryPlayers[position.key] || ""} onChange={event => setLateEntryPlayers(prev => ({...prev, [position.key]: event.target.value}))} disabled={savingLateEntry}>
+                                                                <option value="">Choose player</option>
+                                                                {eligible.map(player => <option key={player.id} value={player.id}>{playerName(player)}{player.bsa_number ? ` (${player.bsa_number})` : ""}</option>)}
+                                                            </select>
+                                                        </> : <div className="row g-2">
+                                                            <div className="col-sm-6"><input className="form-control" value={person.first_name || ""} onChange={event => setLateEntryNewPlayers(prev => ({...prev, [position.key]: {...(prev[position.key] || {}), first_name: event.target.value}}))} placeholder="First name" disabled={savingLateEntry}/></div>
+                                                            <div className="col-sm-6"><input className="form-control" value={person.last_name || ""} onChange={event => setLateEntryNewPlayers(prev => ({...prev, [position.key]: {...(prev[position.key] || {}), last_name: event.target.value}}))} placeholder="Surname" disabled={savingLateEntry}/></div>
+                                                            <div className="col-sm-6"><input className="form-control" value={person.nickname || ""} onChange={event => setLateEntryNewPlayers(prev => ({...prev, [position.key]: {...(prev[position.key] || {}), nickname: event.target.value}}))} placeholder="Nickname (optional)" disabled={savingLateEntry}/></div>
+                                                            <div className="col-sm-6"><input className="form-control" value={person.bsa_number || ""} onChange={event => setLateEntryNewPlayers(prev => ({...prev, [position.key]: {...(prev[position.key] || {}), bsa_number: event.target.value}}))} placeholder="BSA number (optional)" disabled={savingLateEntry}/></div>
+                                                            <div className="col-12"><small className="text-muted">The new player will be added to the selected club and entered in this team in one database transaction.</small></div>
+                                                        </div>}
+                                                    </div>
+                                                </div>;
+                                            })}
+                                        </div>}
+                                        <div className="d-flex justify-content-end mt-3">
+                                            <button type="button" className="btn btn-primary" onClick={handleAddLateEntry} disabled={savingLateEntry || hasCompetitionScoringStarted() || !lateEntrySectionId || !lateEntryClubId || getPositions(competition.format).some(position => (lateEntryPlayerModes[position.key] || "existing") === "existing" ? !lateEntryPlayers[position.key] : !(lateEntryNewPlayers[position.key]?.first_name || "").trim() || !(lateEntryNewPlayers[position.key]?.last_name || "").trim())}>
+                                                {savingLateEntry ? "Adding entry..." : "Add Late Entry & Redraw Section"}
+                                            </button>
+                                        </div>
+                                        {hasCompetitionScoringStarted() && <div className="small text-danger mt-2">Late entries are disabled because scoring has started.</div>}
+                                    </div>
+                                ) : sectionEntryAction === "replacement" ? (
                                     <>
                                         <div className="row g-3 align-items-end">
                                             <div className="col-md-4">
