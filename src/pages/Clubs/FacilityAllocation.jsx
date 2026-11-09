@@ -57,7 +57,7 @@ export default function FacilityAllocation() {
         supabase.from("clubs").select("id,name,short_name").order("name"),
         supabase.from("competition_sections").select("id,competition_id,section_number,section_name").eq("competition_id", competitionId).order("section_number"),
         supabase.from("competition_section_venues").select("section_id,club_id,green_id").eq("competition_id", competitionId),
-        supabase.from("competition_playoff_venues").select("round_id,club_id,green_id").eq("competition_id", competitionId)
+        supabase.from("competition_playoff_venues").select("round_id,club_id").eq("competition_id", competitionId)
       ]);
       for (const result of [roundsRes, matchesRes, teamsRes, greensRes, bookingsRes, clubsRes, sectionsRes, sectionVenuesRes, playoffVenuesRes]) if (result.error) throw result.error;
 
@@ -187,14 +187,11 @@ export default function FacilityAllocation() {
   const eligibleClubs = useMemo(() => clubs.filter(c => greens.some(g => g.club_id === c.id)), [clubs, greens]);
   const selectedGreens = useMemo(() => greens.filter(g => selectedClubIds.includes(g.club_id)), [greens, selectedClubIds]);
 
-  // Pin each section to ONE green for the entire sectional stage.
-  // Green assignment is based on simultaneous match demand, not section count:
-  // if all sections fit on one green (normally six rinks), keep them together
-  // on that green. Only use additional greens when a session exceeds capacity.
+  // Assign every section to exactly one green for the whole sectional stage.
+  // This uses a backtracking capacity search: a locally attractive green choice
+  // must not prevent a valid overall split across the club's other greens.
   const buildSectionGreenMap = (venueIds, savedGreenIds = sectionGreenIds) => {
-    const map = {};
     const sectionsByClub = new Map();
-
     for (const section of [...sections].sort((a, b) =>
       (a.section_number || 0) - (b.section_number || 0)
     )) {
@@ -214,161 +211,152 @@ export default function FacilityAllocation() {
     });
     for (const group of dayRoundGroups.values()) {
       group.sort((a, b) => (a.round_number || 0) - (b.round_number || 0))
-        .forEach((round, index) => {
-          roundDayOrder.set(round.id, Math.min(index, SESSIONS.length - 1));
-        });
+        .forEach((round, index) => roundDayOrder.set(round.id, Math.min(index, SESSIONS.length - 1)));
     }
 
     const demandBySection = new Map(sections.map(section => [section.id, new Map()]));
-
-    for (const match of matches) {
+    // Count only fixtures that can actually be allocated. Stale fixtures with
+    // missing/withdrawn teams must not consume phantom green capacity.
+    for (const match of scheduledMatches) {
       if (!match.section_id || !demandBySection.has(match.section_id)) continue;
       const round = match.round || rounds.find(item => item.id === match.round_id);
       if (!round?.day?.playing_date) continue;
-
-      const sessionIndex = roundDayOrder.get(round.id) ?? 0;
-      const fallback = SESSIONS[sessionIndex];
+      const session = SESSIONS[roundDayOrder.get(round.id) ?? 0];
       const existingBooking = bookings.find(booking =>
         booking.match_id === match.id &&
         booking.competition_id === competitionId &&
-        booking.status !== "cancelled"
+        booking.status !== "cancelled" &&
+        !playoffMatchIds.has(booking.match_id)
       );
       const date = existingBooking?.playing_date || round.day.playing_date;
-      const startsAt = existingBooking?.starts_at || localIso(date, fallback.start);
-      const endsAt = existingBooking?.ends_at || localIso(date, fallback.end);
-      const direction = Number(existingBooking?.direction || fallback.direction || 1);
+      const startsAt = existingBooking?.starts_at || localIso(date, session.start);
+      const endsAt = existingBooking?.ends_at || localIso(date, session.end);
+      const direction = Number(existingBooking?.direction || session.direction || 1);
       const slotKey = `${date}|${startsAt}|${endsAt}|${direction}`;
-
       const sectionDemand = demandBySection.get(match.section_id);
       sectionDemand.set(slotKey, (sectionDemand.get(slotKey) || 0) + 1);
     }
 
-    const availableCapacity = (green, slotKey) => {
-      const [, startsAt, endsAt, directionValue] = slotKey.split("|");
-      const direction = Number(directionValue);
-      if (direction === 2 && !green.allows_direction_change) return 0;
-
-      const external = bookings.filter(booking =>
-        (booking.competition_id !== competitionId || playoffMatchIds.has(booking.match_id)) &&
-        booking.status !== "cancelled" &&
-        booking.green_id === green.id &&
-        overlaps(startsAt, endsAt, booking.starts_at, booking.ends_at)
-      );
-
-      // A different direction occupies the full green. In the same direction,
-      // only the already-booked physical rink is unavailable.
-      if (external.some(booking => Number(booking.direction) !== direction)) return 0;
-
-      return green.rinks.filter(rink =>
-        !external.some(booking => booking.rink_id === rink.id)
-      ).length;
-    };
-
+    const result = {};
     for (const [clubId, clubSections] of sectionsByClub) {
       const clubGreens = greens
         .filter(green => green.club_id === clubId && green.active && green.rinks.length)
-        .sort((a, b) => a.name.localeCompare(b.name, undefined, {
-          numeric: true,
-          sensitivity: "base"
-        }));
-
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
       if (!clubGreens.length) {
         throw new Error(`${clubs.find(club => club.id === clubId)?.name || "The selected club"} has no active greens with active rinks.`);
       }
 
-      const sectionLoads = clubSections.map(section => ({
-        section,
-        slots: demandBySection.get(section.id) || new Map(),
-        total: [...(demandBySection.get(section.id) || new Map()).values()].reduce((sum, count) => sum + count, 0),
-        peak: Math.max(0, ...(demandBySection.get(section.id) || new Map()).values())
-      })).sort((a, b) =>
-        b.peak - a.peak ||
-        b.total - a.total ||
-        (a.section.section_number || 0) - (b.section.section_number || 0)
-      );
+      const loads = clubSections.map(section => {
+        const slots = demandBySection.get(section.id) || new Map();
+        return {
+          section,
+          slots,
+          peak: Math.max(0, ...slots.values()),
+          total: [...slots.values()].reduce((sum, count) => sum + count, 0),
+        };
+      }).sort((a, b) => b.peak - a.peak || b.total - a.total ||
+        (a.section.section_number || 0) - (b.section.section_number || 0));
 
-      const allSlots = [...new Set(sectionLoads.flatMap(load => [...load.slots.keys()]))];
-
-      // Prefer a single green only when its genuinely free rinks (after
-      // accounting for every other competition) can host all sections.
-      const savedGreenIdsForClub = [...new Set(clubSections
-        .map(section => savedGreenIds?.[section.id])
-        .filter(Boolean))];
-      const oneGreenCandidates = [
-        ...clubGreens.filter(green => savedGreenIdsForClub.includes(green.id)),
-        ...clubGreens.filter(green => !savedGreenIdsForClub.includes(green.id))
-      ];
-      const oneGreen = oneGreenCandidates.find(green =>
-        allSlots.every(slot =>
-          sectionLoads.reduce((sum, load) => sum + (load.slots.get(slot) || 0), 0) <=
-          availableCapacity(green, slot)
-        )
-      );
-
-      if (oneGreen) {
-        clubSections.forEach(section => { map[section.id] = oneGreen.id; });
-        continue;
-      }
-
-      // If one green cannot carry the full session demand, assign whole
-      // sections to different greens. Capacity is checked against free rinks,
-      // not nominal rink count, so another competition's bookings are honoured.
-      const loadsByGreen = new Map(clubGreens.map(green => [green.id, new Map()]));
-      for (const load of sectionLoads) {
-        const savedId = savedGreenIds?.[load.section.id];
-        const candidates = [
-          ...clubGreens.filter(green => green.id === savedId),
-          ...clubGreens.filter(green => green.id !== savedId)
-        ];
-
-        const feasible = candidates.filter(green => {
-          const current = loadsByGreen.get(green.id);
-          return [...load.slots.entries()].every(([slot, count]) =>
-            (current.get(slot) || 0) + count <= availableCapacity(green, slot)
-          );
-        });
-
-        if (!feasible.length) {
-          const clubName = clubs.find(club => club.id === clubId)?.name || "The selected club";
-          throw new Error(
-            `${clubName} does not have enough unbooked rink capacity to keep every section together. ` +
-            `The calculation includes existing bookings from other competitions. Move a whole section to another eligible club or adjust the playing sessions.`
-          );
+      const capacityCache = new Map();
+      const capacityFor = (green, slotKey) => {
+        const cacheKey = `${green.id}|${slotKey}`;
+        if (capacityCache.has(cacheKey)) return capacityCache.get(cacheKey);
+        const [, startsAt, endsAt, directionText] = slotKey.split("|");
+        const direction = Number(directionText);
+        if (direction === 2 && !green.allows_direction_change) {
+          capacityCache.set(cacheKey, 0);
+          return 0;
         }
+        const external = bookings.filter(booking =>
+          (booking.competition_id !== competitionId || playoffMatchIds.has(booking.match_id)) &&
+          booking.status !== "cancelled" &&
+          booking.green_id === green.id &&
+          overlaps(startsAt, endsAt, booking.starts_at, booking.ends_at)
+        );
+        const capacity = external.some(booking => Number(booking.direction) !== direction)
+          ? 0
+          : green.rinks.filter(rink => !external.some(booking => booking.rink_id === rink.id)).length;
+        capacityCache.set(cacheKey, capacity);
+        return capacity;
+      };
 
-        feasible.sort((a, b) => {
+      const assignedLoad = new Map(clubGreens.map(green => [green.id, new Map()]));
+      const clubPlan = {};
+      let searchNodes = 0;
+      const maxSearchNodes = 200000;
+      const search = index => {
+        if (index >= loads.length) return true;
+        if (++searchNodes > maxSearchNodes) return false;
+        const load = loads[index];
+        const savedId = savedGreenIds?.[load.section.id];
+        const candidates = clubGreens.filter(green =>
+          [...load.slots.entries()].every(([slot, count]) => {
+            const alreadyAssigned = assignedLoad.get(green.id).get(slot) || 0;
+            return alreadyAssigned + count <= capacityFor(green, slot);
+          })
+        ).sort((a, b) => {
           const score = green => {
-            const current = loadsByGreen.get(green.id);
+            const current = assignedLoad.get(green.id);
             let peak = 0;
             for (const [slot, count] of load.slots) {
-              const capacity = Math.max(1, availableCapacity(green, slot));
-              peak = Math.max(peak, ((current.get(slot) || 0) + count) / capacity);
+              peak = Math.max(peak, ((current.get(slot) || 0) + count) / Math.max(1, capacityFor(green, slot)));
             }
             return peak;
           };
-          const diff = score(a) - score(b);
-          if (Math.abs(diff) > 0.0001) return diff;
+          const scoreDiff = score(a) - score(b);
+          if (Math.abs(scoreDiff) > 0.000001) return scoreDiff;
           if (a.id === savedId) return -1;
           if (b.id === savedId) return 1;
           return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
         });
 
-        const chosen = feasible[0];
-        map[load.section.id] = chosen.id;
-        const current = loadsByGreen.get(chosen.id);
-        for (const [slot, count] of load.slots) {
-          current.set(slot, (current.get(slot) || 0) + count);
+        for (const green of candidates) {
+          clubPlan[load.section.id] = green.id;
+          const current = assignedLoad.get(green.id);
+          for (const [slot, count] of load.slots) current.set(slot, (current.get(slot) || 0) + count);
+          if (search(index + 1)) return true;
+          for (const [slot, count] of load.slots) {
+            const remaining = (current.get(slot) || 0) - count;
+            if (remaining > 0) current.set(slot, remaining);
+            else current.delete(slot);
+          }
+          delete clubPlan[load.section.id];
         }
-      }
-    }
+        return false;
+      };
 
-    return map;
+      if (!search(0)) {
+        const demandSummary = loads.map(load => {
+          const best = clubGreens.map(green => {
+            const shortages = [...load.slots.entries()].map(([slot, count]) => ({
+              slot,
+              demand: count,
+              capacity: capacityFor(green, slot),
+            })).sort((a, b) => (a.capacity - a.demand) - (b.capacity - b.demand));
+            return { green, worst: shortages[0] };
+          }).sort((a, b) => (b.worst.capacity - b.worst.demand) - (a.worst.capacity - a.worst.demand))[0];
+          return `${load.section.section_name || `Section ${load.section.section_number}`}: best option ${best.green.name}, peak demand ${best.worst.demand}, available ${best.worst.capacity}`;
+        }).join("; ");
+        throw new Error(
+          `${clubs.find(club => club.id === clubId)?.name || "The selected club"} cannot fit all sections on its available greens for the full sectional schedule. ` +
+          `BowlPoint tested whole-section assignments across ${clubGreens.map(green => green.name).join(", ")}. ` +
+          `${searchNodes > maxSearchNodes ? "The search limit was reached. " : "No feasible fixed-green split was found. "}${demandSummary}`
+        );
+      }
+      Object.assign(result, clubPlan);
+    }
+    return result;
   };
 
   const sectionGreenById = useMemo(() => {
     try { return buildSectionGreenMap(sectionVenueIds, sectionGreenIds); }
     catch { return {}; }
-  }, [sections, sectionVenueIds, sectionGreenIds, greens, clubs]);
+  }, [sections, sectionVenueIds, sectionGreenIds, greens, clubs, rounds, scheduledMatches, bookings, playoffMatchIds]);
+  const proposedSectionGreenById = useMemo(() => {
+    if (!venueProposalReady) return {};
+    try { return buildSectionGreenMap(proposedSectionVenueIds, sectionGreenIds); }
+    catch { return {}; }
+  }, [venueProposalReady, proposedSectionVenueIds, sectionGreenIds, sections, greens, clubs, rounds, scheduledMatches, bookings, playoffMatchIds]);
   const toggleClub = (clubId, checked) => setSelectedClubIds(current => checked ? [...new Set([...current, clubId])] : current.filter(id => id !== clubId));
 
   const saveSectionVenues = async (next = sectionVenueIds, greenMap = sectionGreenIds) => {
@@ -970,6 +958,10 @@ export default function FacilityAllocation() {
               const currentId = venueProposalReady ? proposedSectionVenueIds[section.id] || "" : sectionVenueIds[section.id] || "";
               const host = clubs.find(club => club.id === currentId);
               const sectionHasProposal = venueProposalReady && Boolean(currentId);
+              const assignedGreenId = venueProposalReady
+                ? proposedSectionGreenById[section.id]
+                : sectionGreenById[section.id];
+              const assignedGreen = greens.find(green => green.id === assignedGreenId);
               return <div className="col-md-6 col-xl-4" key={section.id}>
                 <div className="border rounded p-3 h-100">
                   <div className="fw-semibold mb-2">{section.section_name || `Section ${section.section_number}`}</div>
@@ -977,7 +969,8 @@ export default function FacilityAllocation() {
                     <option value="">Choose host club</option>
                     {clubs.filter(club => eligibleClubs.some(item => item.id === club.id)).map(club => <option key={club.id} value={club.id}>{club.name}</option>)}
                   </select> : <div>{host?.name || <span className="text-danger">No host club saved</span>}</div>}
-                  {sectionHasProposal && <div className="small text-muted mt-2">Proposed host for all sectional dates</div>}
+                  {assignedGreen ? <div className="small mt-2"><span className="text-muted">Assigned green:</span> <strong>{assignedGreen.name}</strong></div> : <div className="small text-warning mt-2">Green assignment will be calculated from section demand and available rink capacity.</div>}
+                  {sectionHasProposal && <div className="small text-muted mt-1">Proposed host and green for all sectional dates</div>}
                 </div>
               </div>;
             })}
