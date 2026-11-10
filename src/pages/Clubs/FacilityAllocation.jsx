@@ -178,9 +178,19 @@ export default function FacilityAllocation() {
     !/playoff|quarter.?final|semi.?final|grand.?final|final/i.test(row.round_name || "")
   );
   const sectionalScheduledMatches = useMemo(() => scheduledMatches.filter(row => isSectionalFixture(row)), [scheduledMatches, sections]);
-  const playoffScheduledMatches = useMemo(() => scheduledMatches.filter(row => !isSectionalFixture(row)), [scheduledMatches, sections]);
+  // Playoff fixtures must be allocatable before teams qualify. Unlike sectional
+  // fixtures, an existing playoff match row with a saved round date is enough:
+  // its match ID is the stable anchor for the advance rink booking.
+  const playoffMatches = useMemo(
+    () => matches.filter(row => !isSectionalFixture(row)),
+    [matches, sections]
+  );
+  const playoffScheduledMatches = useMemo(
+    () => playoffMatches.filter(row => row.round?.day?.playing_date),
+    [playoffMatches]
+  );
   const sectionalMatchIds = useMemo(() => new Set(scheduledMatches.filter(row => isSectionalFixture(row)).map(row => row.id)), [scheduledMatches, sections]);
-  const playoffMatchIds = useMemo(() => new Set(scheduledMatches.filter(row => !isSectionalFixture(row)).map(row => row.id)), [scheduledMatches, sections]);
+  const playoffMatchIds = useMemo(() => new Set(playoffMatches.map(row => row.id)), [playoffMatches]);
   const ignoredStaleMatchCount = matches.length - validMatches.length;
   const greenById = useMemo(() => new Map(greens.map(g => [g.id, g])), [greens]);
   const allocationByMatch = useMemo(() => new Map(allocations.map(a => [a.match_id, a])), [allocations]);
@@ -669,7 +679,8 @@ export default function FacilityAllocation() {
       group.sort((a, b) => a.round_number - b.round_number)
         .forEach((r, i) => roundDayOrder.set(r.id, Math.min(i, SESSIONS.length - 1)));
     }
-    return scheduledMatches.map(m => {
+    const sourceMatches = activeStage === "playoff" ? playoffScheduledMatches : sectionalScheduledMatches;
+    return sourceMatches.map(m => {
       const idx = roundDayOrder.get(m.round_id) ?? 0;
       const fallbackSession = SESSIONS[idx];
       const old = bookings.find(b => b.match_id === m.id && b.competition_id === competitionId && b.status !== "cancelled");
@@ -717,7 +728,9 @@ export default function FacilityAllocation() {
     setAllocating(true); setError(""); setNotice("");
     try {
       const rows = buildInitialRows().filter(row => activeStage === "sectional" ? isSectionalFixture(row) : !isSectionalFixture(row)).sort((a, b) => `${a.playing_date}:${a.starts_at}:${a.round_number}:${a.match_number}`.localeCompare(`${b.playing_date}:${b.starts_at}:${b.round_number}:${b.match_number}`));
-      if (!rows.length) throw new Error("No fixtures have both teams and a saved playing date. Confirm the draw and save the playing dates first.");
+      if (!rows.length) throw new Error(activeStage === "playoff"
+        ? "No playoff fixture rows have a saved playing date. Confirm that the playoff rounds and their dates have been created first. Teams do not need to be assigned yet."
+        : "No sectional fixtures have both teams and a saved playing date. Confirm the draw and save the playing dates first.");
       if (!selectedClubIds.length) throw new Error("Select the clubs that are permitted to host this competition before allocating rinks.");
       const isSectionalRow = isSectionalFixture;
       const sectionGreenMap = activeStage === "sectional" ? buildSectionGreenMap(sectionVenueIds, sectionGreenIds) : {};
@@ -1020,7 +1033,7 @@ export default function FacilityAllocation() {
       </> : <div className="card border-0 shadow-sm mb-4"><div className="card-header bg-white"><h5 className="mb-1">Playoff Round Venues</h5><div className="small text-muted">Choose a venue independently for each playoff round. This does not change sectional host clubs or existing rink bookings.</div></div><div className="card-body"><div className="row g-3">{rounds.filter(round => /playoff|quarter.?final|semi.?final|grand.?final|final/i.test(round.round_name || "")).map(round => <div className="col-md-6 col-xl-4" key={round.id}><label className="form-label fw-semibold">{round.round_name}</label><select className="form-select" value={playoffVenueIds[round.id] || ""} onChange={e => setPlayoffVenueIds(current => ({ ...current, [round.id]: e.target.value }))}><option value="">Use round's scheduled venue</option>{eligibleClubs.map(club => <option key={club.id} value={club.id}>{club.name}</option>)}</select></div>)}</div><button type="button" className="btn btn-outline-primary mt-3" onClick={savePlayoffVenues} disabled={savingPlayoffVenues}>{savingPlayoffVenues ? "Saving venues…" : "Save Playoff Venues"}</button></div></div>}
       <div className="card border-0 shadow-sm mb-4"><div className="card-body">
         <div className="row g-3 align-items-center">
-          <div className="col-md"><div className="fw-semibold">Fixtures ready for allocation</div><div className="text-muted small">Only matches in the selected stage with both teams and a saved date are allocated. Existing fixture dates/times and saved venues are retained; only greens and rinks are regenerated.</div></div>
+          <div className="col-md"><div className="fw-semibold">Fixtures ready for allocation</div><div className="text-muted small">{activeStage === "playoff" ? "Playoff fixture slots with a saved date can be allocated before teams qualify. Saved venues and dates/times are retained; only greens and rinks are generated." : "Only sectional matches with both teams and a saved date are allocated. Existing fixture dates/times and saved venues are retained; only greens and rinks are regenerated."}</div></div>
           <div className="col-md-auto"><span className="badge bg-primary me-2">{(activeStage === "sectional" ? sectionalScheduledMatches : playoffScheduledMatches).length} ready</span>{missingScheduleCount > 0 && <span className="badge bg-warning text-dark">{missingScheduleCount} need dates</span>}</div>
           <div className="col-md-auto"><button className="btn btn-primary" onClick={runAutoAllocation} disabled={allocating || !(activeStage === "sectional" ? sectionalScheduledMatches : playoffScheduledMatches).length || !selectedClubIds.length || (activeStage === "sectional" && sections.some(section => !sectionVenueIds[section.id]))}>{allocating ? <><span className="spinner-border spinner-border-sm me-2"/>Allocating…</> : <><i className="bi bi-magic me-2"/>Automatically Allocate Rinks</>}</button></div>
         </div>

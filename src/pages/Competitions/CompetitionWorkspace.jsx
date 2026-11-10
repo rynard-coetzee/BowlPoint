@@ -62,7 +62,7 @@ function CompetitionWorkspace() {
     const [replacementPlayerMode, setReplacementPlayerMode] = useState("existing");
     const [replacementPlayerId, setReplacementPlayerId] = useState("");
     const [replacementSearch, setReplacementSearch] = useState("");
-    const [replacementNewPlayer, setReplacementNewPlayer] = useState({ first_name: "", last_name: "", nickname: "", bsa_number: "" });
+    const [replacementNewPlayer, setReplacementNewPlayer] = useState({ first_name: "", last_name: "", nickname: "", bsa_number: "", club_id: "" });
     const [lateEntrySectionId, setLateEntrySectionId] = useState("");
     const [lateEntryClubId, setLateEntryClubId] = useState("");
     const [lateEntryPlayers, setLateEntryPlayers] = useState({});
@@ -2219,7 +2219,10 @@ const handleAddReplacement = async () => {
         }
 
         const enteredPlayerIds = new Set(
-            teams.flatMap(item => (item.competition_team_players || [])
+            teams.filter(item => {
+                const allocatedTeamIds = new Set((confirmedDraw?.sections || []).flatMap(section => [...(section.allTeams || []), ...(section.teams || [])].map(sectionEntry => String(sectionEntry.competition_team_id || sectionEntry.id))));
+                return allocatedTeamIds.has(String(item.id));
+            }).flatMap(item => (item.competition_team_players || [])
                 .filter(row => !(item.id === team.id && row.id === oldRosterRow.id))
                 .map(row => String(row.player_id)))
         );
@@ -2233,12 +2236,18 @@ const handleAddReplacement = async () => {
                 alert("Enter the replacement player's first name and surname.");
                 return;
             }
+            const replacementClubId = replacementNewPlayer.club_id || clubId;
+            const participatingClubIds = new Set(participatingClubs.map(item => String(item.club_id)));
+            if (!participatingClubIds.has(String(replacementClubId))) {
+                alert("Choose a club that is participating in this competition.");
+                return;
+            }
             const insertPayload = {
                 first_name: firstName,
                 last_name: lastName,
                 nickname: replacementNewPlayer.nickname.trim() || null,
                 bsa_number: replacementNewPlayer.bsa_number.trim() || null,
-                club_id: clubId,
+                club_id: replacementClubId,
                 active: true
             };
             setSavingSectionSwap(true);
@@ -2254,12 +2263,8 @@ const handleAddReplacement = async () => {
             }
         } else {
             const selectedPlayer = players.find(player => String(player.id) === String(replacementPlayerIdToUse));
-            const belongsToClub = selectedPlayer && (
-                String(selectedPlayer.club_id || "") === String(clubId) ||
-                String(selectedPlayer.second_club_id || "") === String(clubId)
-            );
-            if (!selectedPlayer || !belongsToClub) {
-                alert("Choose an existing player who belongs to the same club as the withdrawn entry.");
+            if (!selectedPlayer || selectedPlayer.active === false) {
+                alert("Choose an existing active player.");
                 return;
             }
         }
@@ -2280,7 +2285,7 @@ const handleAddReplacement = async () => {
         const newName = playerName(replacementPlayer);
         if (!window.confirm(
             `Replace ${oldName} with ${newName} in ${getTeamBaseName(team)}?\n\n` +
-            `The replacement must be from ${team.clubs?.name || "the same club"}. The team number, section, draw position and retained fixture IDs will remain unchanged. ` +
+            `The replacement may be from any club participating in this competition. The team number, section, draw position and retained fixture IDs will remain unchanged. ` +
             `Affected sectional fixtures will be synchronized; playoff fixtures and allocations will not be changed.`
         )) {
             if (newlyCreatedPlayerId) await supabase.from("players").delete().eq("id", newlyCreatedPlayerId);
@@ -2311,7 +2316,7 @@ const handleAddReplacement = async () => {
             setReplacementPlayerId("");
             setReplacementPosition("");
             setReplacementSearch("");
-            setReplacementNewPlayer({ first_name: "", last_name: "", nickname: "", bsa_number: "" });
+            setReplacementNewPlayer({ first_name: "", last_name: "", nickname: "", bsa_number: "", club_id: "" });
         } catch (error) {
             console.error("Unable to add replacement:", error);
             // Restore the previous roster member if the fixture transaction fails.
@@ -3646,7 +3651,36 @@ const handleAddReplacement = async () => {
      * logic. Visual team labels should use TeamDisplay below so player names
      * can be rendered in a smaller font.
      */
-    const getTeamDisplayName = (team) => {
+    
+    // Entry label for section management dropdowns. Keep the team identifier
+    // visible, but include the roster so secretaries can identify players.
+    const getSectionEntryOptionLabel = (team) => {
+        if (!team) return "Unknown entry";
+
+        const teamName = getTeamBaseName(team);
+        const roster = (team.competition_team_players || [])
+            .slice()
+            .sort((a, b) => (a.position_order || 0) - (b.position_order || 0))
+            .map(item => {
+                const player = item.players || item.player || {};
+                const name = player.display_name?.trim()
+                    || [player.nickname?.trim() || player.first_name?.trim(), player.last_name?.trim()]
+                        .filter(Boolean)
+                        .join(" ");
+                return name;
+            })
+            .filter(Boolean);
+
+        const clubCode = team.clubs?.short_name?.trim()
+            || team.club_short_name?.trim()
+            || team.clubs?.name?.trim()
+            || "";
+
+        const rosterLabel = roster.length ? roster.join(" / ") : "No players listed";
+        return `${teamName} — ${rosterLabel}${clubCode ? ` (${clubCode})` : ""}`;
+    };
+
+const getTeamDisplayName = (team) => {
         return getTeamBaseName(team);
     };
 
@@ -5378,24 +5412,27 @@ const handleAddReplacement = async () => {
                                         </div>
                                         {replacementTeamId && (() => {
                                             const selectedTeam = teams.find(team => team.id === replacementTeamId);
-                                            const selectedClubId = selectedTeam?.club_id;
                                             const positionKey = competition.format === "singles" ? "player" : replacementPosition;
                                             const currentRosterRow = (selectedTeam?.competition_team_players || []).find(row => row.position === positionKey);
-                                            const currentPlayerIds = new Set(teams.flatMap(team => (team.competition_team_players || []).filter(row => !(team.id === replacementTeamId && row.id === currentRosterRow?.id)).map(row => String(row.player_id))));
-                                            const eligiblePlayers = players.filter(player => (String(player.club_id || "") === String(selectedClubId) || String(player.second_club_id || "") === String(selectedClubId)) && !currentPlayerIds.has(String(player.id)) && String(player.id) !== String(currentRosterRow?.player_id || ""));
-                                            const filteredPlayers = eligiblePlayers.filter(player => `${playerName(player)} ${player.bsa_number || ""}`.toLowerCase().includes(replacementSearch.toLowerCase()));
+                                            const allocatedTeamIds = new Set((confirmedDraw?.sections || []).flatMap(section => [...(section.allTeams || []), ...(section.teams || [])].map(entry => String(entry.competition_team_id || entry.id))));
+                                            const allocatedPlayerIds = new Set(teams.filter(team => allocatedTeamIds.has(String(team.id))).flatMap(team => (team.competition_team_players || []).filter(row => !(team.id === replacementTeamId && row.id === currentRosterRow?.id)).map(row => String(row.player_id))));
+                                            const eligiblePlayers = players.filter(player => player.active !== false && !allocatedPlayerIds.has(String(player.id)) && String(player.id) !== String(currentRosterRow?.player_id || ""));
+                                            const filteredPlayers = eligiblePlayers.filter(player => `${playerName(player)} ${player.bsa_number || ""} ${clubs.find(club => String(club.id) === String(player.club_id))?.name || ""} ${clubs.find(club => String(club.id) === String(player.second_club_id))?.name || ""}`.toLowerCase().includes(replacementSearch.toLowerCase()));
                                             return <div className="border rounded p-3 mt-3">
-                                                <div className="small text-muted mb-2">Replacement must belong to {selectedTeam?.clubs?.name || "the same club"}. Players already entered elsewhere in this competition are excluded.</div>
+                                                <div className="small text-muted mb-2">Choose an eligible player from any club participating in this competition. Players already entered elsewhere in this competition are excluded.</div>
                                                 <div className="btn-group mb-3" role="group">
                                                     <button type="button" className={`btn btn-sm ${replacementPlayerMode === "existing" ? "btn-primary" : "btn-outline-primary"}`} onClick={() => setReplacementPlayerMode("existing")}>Existing player</button>
                                                     <button type="button" className={`btn btn-sm ${replacementPlayerMode === "new" ? "btn-primary" : "btn-outline-primary"}`} onClick={() => setReplacementPlayerMode("new")}>Create new player</button>
                                                 </div>
                                                 {replacementPlayerMode === "existing" ? <>
-                                                    <label className="form-label fw-semibold">Search club players</label>
+                                                    <label className="form-label fw-semibold">Search all club players</label>
                                                     <input className="form-control mb-2" value={replacementSearch} onChange={event => setReplacementSearch(event.target.value)} placeholder="Search by player name or BSA number" />
                                                     <select className="form-select" value={replacementPlayerId} onChange={event => setReplacementPlayerId(event.target.value)} disabled={competition.format !== "singles" && !replacementPosition}>
                                                         <option value="">Choose replacement player</option>
-                                                        {filteredPlayers.map(player => <option key={player.id} value={player.id}>{player.bsa_number ? `${player.bsa_number} — ` : ""}{playerName(player)}</option>)}
+                                                        {filteredPlayers.map(player => {
+                                                            const playerClub = clubs.find(club => String(club.id) === String(player.club_id)) || clubs.find(club => String(club.id) === String(player.second_club_id));
+                                                            return <option key={player.id} value={player.id}>{player.bsa_number ? `${player.bsa_number} — ` : ""}{playerName(player)}{playerClub?.short_name ? ` (${playerClub.short_name})` : ""}</option>;
+                                                        })}
                                                     </select>
                                                     {!filteredPlayers.length && <div className="small text-muted mt-2">No eligible existing players match this search.</div>}
                                                 </> : <>
@@ -5404,8 +5441,9 @@ const handleAddReplacement = async () => {
                                                         <div className="col-md-6"><label className="form-label">Surname *</label><input className="form-control" value={replacementNewPlayer.last_name} onChange={event => setReplacementNewPlayer(prev => ({ ...prev, last_name: event.target.value }))} /></div>
                                                         <div className="col-md-6"><label className="form-label">Nickname</label><input className="form-control" value={replacementNewPlayer.nickname} onChange={event => setReplacementNewPlayer(prev => ({ ...prev, nickname: event.target.value }))} /></div>
                                                         <div className="col-md-6"><label className="form-label">BSA number</label><input className="form-control" value={replacementNewPlayer.bsa_number} onChange={event => setReplacementNewPlayer(prev => ({ ...prev, bsa_number: event.target.value }))} /></div>
+                                                        <div className="col-md-6"><label className="form-label">Player's club</label><select className="form-select" value={replacementNewPlayer.club_id || selectedTeam?.club_id || ""} onChange={event => setReplacementNewPlayer(prev => ({ ...prev, club_id: event.target.value }))}><option value="">Choose participating club</option>{participatingClubs.map(club => <option key={club.club_id} value={club.club_id}>{club.clubs?.name || "Unknown club"}</option>)}</select></div>
                                                     </div>
-                                                    <div className="small text-muted mt-2">The new player will be added to the master player database under {selectedTeam?.clubs?.name || "the team's club"}.</div>
+                                                    <div className="small text-muted mt-2">The new player will be added to the master player database under the selected participating club.</div>
                                                 </>}
                                                 <div className="d-flex justify-content-end mt-3"><button type="button" className="btn btn-primary" onClick={handleAddReplacement} disabled={savingSectionSwap || hasCompetitionScoringStarted() || (competition.format !== "singles" && !replacementPosition) || (replacementPlayerMode === "existing" && !replacementPlayerId) || (replacementPlayerMode === "new" && (!replacementNewPlayer.first_name.trim() || !replacementNewPlayer.last_name.trim()))}>{savingSectionSwap ? "Adding replacement…" : "Replace Withdrawn Entry"}</button></div>
                                             </div>;
@@ -5432,7 +5470,7 @@ const handleAddReplacement = async () => {
                                                     {(confirmedDraw.sections.find(section => section.id === withdrawSectionId)?.teams || []).map(entry => {
                                                         const teamId = entry.competition_team_id || entry.id;
                                                         const fullTeam = teams.find(team => String(team.id) === String(teamId)) || entry;
-                                                        return <option key={teamId} value={teamId}>{getTeamBaseName(fullTeam)}</option>;
+                                                        return <option key={teamId} value={teamId}>{getSectionEntryOptionLabel(fullTeam)}</option>;
                                                     })}
                                                 </select>
                                             </div>
@@ -5468,7 +5506,7 @@ const handleAddReplacement = async () => {
                                             {(confirmedDraw.sections.find(section => section.id === swapSectionA)?.teams || []).map(entry => {
                                                 const teamId = entry.competition_team_id || entry.id;
                                                 const fullTeam = teams.find(team => team.id === teamId) || entry;
-                                                return <option key={teamId} value={teamId}>{getTeamBaseName(fullTeam)}</option>;
+                                                return <option key={teamId} value={teamId}>{getSectionEntryOptionLabel(fullTeam)}</option>;
                                             })}
                                         </select>
                                     </div>
@@ -5486,7 +5524,7 @@ const handleAddReplacement = async () => {
                                             {(confirmedDraw.sections.find(section => section.id === swapSectionB)?.teams || []).map(entry => {
                                                 const teamId = entry.competition_team_id || entry.id;
                                                 const fullTeam = teams.find(team => team.id === teamId) || entry;
-                                                return <option key={teamId} value={teamId}>{getTeamBaseName(fullTeam)}</option>;
+                                                return <option key={teamId} value={teamId}>{getSectionEntryOptionLabel(fullTeam)}</option>;
                                             })}
                                         </select>
                                     </div>}
