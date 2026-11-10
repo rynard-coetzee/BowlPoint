@@ -4251,6 +4251,28 @@ const getTeamDisplayName = (team) => {
                 </div>
             </div>
 
+            {confirmedDraw && (
+                <div className="d-flex justify-content-end mb-3">
+                    <button
+                        type="button"
+                        className="btn btn-outline-primary"
+                        onClick={() => {
+                            setShowSetupDetails(true);
+                            setShowSectionManager(true);
+                            window.setTimeout(() => {
+                                document.getElementById("manage-section-entries")?.scrollIntoView({
+                                    behavior: "smooth",
+                                    block: "start"
+                                });
+                            }, 100);
+                        }}
+                    >
+                        <i className="bi bi-arrow-left-right me-2"></i>
+                        Manage Section Entries
+                    </button>
+                </div>
+            )}
+
             {/* Overview */}
 
             <div className="row g-3 mb-4">
@@ -5291,14 +5313,14 @@ const getTeamDisplayName = (team) => {
                             ].map(([label,value]) => <div className="col-md-3" key={label}><div className="card border h-100"><div className="card-body"><div className="text-muted small">{label}</div><div className="fs-3 fw-bold">{value}</div></div></div></div>)}
                         </div>
                         <div className="alert alert-success"><strong>Draw is confirmed.</strong><div className="small mt-1">Sections, fixtures and playoff rounds below are read directly from Supabase. Dates and venues have not been assigned yet.</div></div>
-                        <div className="card border mb-4">
+                        <div id="manage-section-entries" className="card border mb-4" style={{ scrollMarginTop: "150px" }}>
                             <div className="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
                                 <div>
                                     <strong><i className="bi bi-arrow-left-right me-2"></i>Manage Section Entries</strong>
                                     <div className="small text-muted mt-1">Swap or move entries, withdraw Singles entries or replace a player before scoring starts. Pairs, Trips and Fours retain their team identity when an individual player is replaced.</div>
                                 </div>
                                 <button type="button" className="btn btn-outline-primary btn-sm" onClick={() => setShowSectionManager(value => !value)}>
-                                    {showSectionManager ? "Close" : "Manage Sections"}
+                                    {showSectionManager ? "Close" : "Open"}
                                 </button>
                             </div>
                             {showSectionManager && <div className="card-body">

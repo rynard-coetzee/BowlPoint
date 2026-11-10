@@ -938,13 +938,12 @@ export default function FacilityAllocation() {
                 <button type="button" className="btn btn-sm btn-primary ms-auto" onClick={() => setClubsDropdownOpen(false)}>Done</button>
               </div>
               {eligibleClubs.length === 0 && <div className="text-muted small">No clubs with active greens and rinks are configured.</div>}
-              {clubs.map(club => {
-                const hasActiveRinks = eligibleClubs.some(item => item.id === club.id);
-                return <label key={club.id} className={`dropdown-item d-flex align-items-center gap-2 px-1 py-2 ${!hasActiveRinks ? "text-muted" : ""}`} style={{ whiteSpace: "normal", cursor: hasActiveRinks ? "pointer" : "not-allowed" }}>
-                  <input className="form-check-input mt-0" type="checkbox" checked={selectedClubIds.includes(club.id)} disabled={!hasActiveRinks} onChange={e => toggleClub(club.id, e.target.checked)} />
-                  <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{club.name}{club.short_name ? <span className="text-muted small"> ({club.short_name})</span> : null}{!hasActiveRinks ? <span className="small"> — no active rinks</span> : null}</span>
-                </label>;
-              })}
+              {eligibleClubs.map(club => (
+                <label key={club.id} className="dropdown-item d-flex align-items-center gap-2 px-1 py-2" style={{ whiteSpace: "normal", cursor: "pointer" }}>
+                  <input className="form-check-input mt-0" type="checkbox" checked={selectedClubIds.includes(club.id)} onChange={e => toggleClub(club.id, e.target.checked)} />
+                  <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{club.name}{club.short_name ? <span className="text-muted small"> ({club.short_name})</span> : null}</span>
+                </label>
+              ))}
             </div>}
           </div>
         </div>
