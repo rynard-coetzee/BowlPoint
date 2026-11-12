@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabaseClient";
+import { logAuditEvent } from "../../services/auditService";
 import { getPlayerDisplayName } from "../../utils/playerDisplay";
 
 function getSectionByeTeam(section, roundNumber) {
@@ -3397,6 +3398,19 @@ const handleAddReplacement = async () => {
                 .eq("id", competitionId);
 
             if (competitionError) throw competitionError;
+
+            await logAuditEvent(
+                "DRAW_GENERATED",
+                `Confirmed competition draw: ${competition?.name || "Competition"}. Created ${plan.sectionCount} section(s), ${plan.totalRounds} round(s) and ${createdMatchIds.length} fixture(s).`,
+                {
+                    competition_name: competition?.name || null,
+                    sections: plan.sectionCount,
+                    rounds: plan.totalRounds,
+                    fixtures: createdMatchIds.length,
+                    teams: plan.teamCount
+                },
+                competitionId
+            );
 
             setDrawProposal(null);
             setIsEditingDrawProposal(false);

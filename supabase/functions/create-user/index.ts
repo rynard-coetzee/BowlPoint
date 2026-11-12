@@ -131,6 +131,28 @@ Deno.serve(async (req) => {
             return json({ error: "Auth account was created, but the BowlPoint profile could not be created." }, 500);
         }
 
+        // The service-role client bypasses RLS and auth.uid() is therefore null
+        // inside database triggers. Add an explicit actor-attributed event.
+        const { error: auditError } = await callerClient.from("audit_logs").insert({
+            actor_id: caller.id,
+            actor_email: caller.email || null,
+            actor_name: callerProfile.full_name || null,
+            event_source: "edge_function",
+            action: "WORKFLOW_ACTION",
+            summary: `Created BowlPoint user ${fullName} (${email}) with role ${role}.`,
+            metadata: {
+                operation: "create_user",
+                target_user_id: created.user.id,
+                target_email: email,
+                assigned_role: role
+            }
+        });
+        if (auditError) {
+            // User creation has succeeded. Do not roll it back because audit
+            // telemetry failed; make the failure visible to server operators.
+            console.error("Unable to write create-user audit event:", auditError);
+        }
+
         return json({
             success: true,
             user: {

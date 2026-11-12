@@ -27,6 +27,7 @@ import Login from "./pages/Auth/Login";
 import ForgotPassword from "./pages/Auth/ForgotPassword";
 import ResetPassword from "./pages/Auth/ResetPassword";
 import Users from "./pages/Users/Users";
+import AuditLogs from "./pages/AuditLogs/AuditLogs";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
 
 
@@ -199,6 +200,12 @@ const router = createBrowserRouter([
                 children: [{ index: true, element: <Users /> }]
             },
 
+
+            {
+                path: "audit-log",
+                element: <ProtectedRoute roles={["admin"]} />,
+                children: [{ index: true, element: <AuditLogs /> }]
+            },
 
             {
                 path: "settings",

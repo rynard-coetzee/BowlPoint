@@ -65,6 +65,13 @@ const navigation = [
     },
 
     {
+        title: "Audit Log",
+        roles: ["admin"],
+        path: "/audit-log",
+        icon: "clipboard-data-fill"
+    },
+
+    {
         title: "Settings",
         roles: ["admin", "comp_secretary"],
         path: "/settings",

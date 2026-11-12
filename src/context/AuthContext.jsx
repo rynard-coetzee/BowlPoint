@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
+import { logAuditEvent } from "../services/auditService";
 
 const AuthContext = createContext(null);
 
@@ -71,10 +72,17 @@ export function AuthProvider({ children }) {
 
     const signIn = async (email, password) => {
         const result = await supabase.auth.signInWithPassword({ email, password });
+        if (!result.error && result.data?.user) {
+            void logAuditEvent("LOGIN", "User signed in successfully.", {
+                login_method: "email_password"
+            });
+        }
         return result;
     };
 
     const signOut = async () => {
+        // Record the event while the current access token is still available.
+        await logAuditEvent("LOGOUT", "User signed out.");
         const result = await supabase.auth.signOut();
         setSession(null);
         setProfile(null);

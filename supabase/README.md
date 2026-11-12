@@ -22,3 +22,9 @@ points, aggregate, shots for, team number.
 These scripts are deliberately TEST-prefixed and are intended for a test
 Supabase database/project. They do not delete the reusable global TEST clubs
 or TEST players.
+
+## BowlPoint audit logging
+
+Apply `migrations/20261112_audit_logging.sql` to the Supabase project before deploying the updated frontend and Edge Functions. The migration creates the administrator-only `audit_logs` table, installs row-change triggers on existing public application tables, adds the authenticated `audit_log_event` RPC, and defines one-year retention cleanup. If `pg_cron` is already enabled, it schedules daily cleanup automatically; otherwise schedule `select public.audit_delete_expired();` daily using a trusted scheduler.
+
+The Audit Log page is available only to active users with the `admin` role. The browser cannot directly insert, update, or delete audit records.
