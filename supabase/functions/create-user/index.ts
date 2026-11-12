@@ -196,9 +196,10 @@ Deno.serve(async (req: Request) => {
                 actor_name: callerProfile.full_name || null,
                 event_source: "edge_function",
                 action: "WORKFLOW_ACTION",
-                summary: `Created a BowlPoint user with role ${role}.`,
+                summary: `Created user ${fullName} (${role}).`,
                 metadata: {
                     operation: "create_user",
+                    target_name: fullName,
                     assigned_role: role
                 }
             });
