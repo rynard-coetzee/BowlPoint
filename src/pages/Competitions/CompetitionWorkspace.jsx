@@ -5671,6 +5671,8 @@ const getTeamDisplayName = (team) => {
 
                                     <option value="midweek">Midweek Tournament</option>
 
+                                    <option value="week">Weekday Tournament</option>
+
                                 </select>
 
                             </div>
@@ -5828,7 +5830,9 @@ const getTeamDisplayName = (team) => {
                                             ? "Official sectional pairings and byes loaded from the secretary's draw. Confirming creates the fixtures; dates, Riverside venues and rink allocations must be set in the Playing Schedule."
                                             : drawProposal.recommendedPlan.schedule.competitionType === "weekend"
                                                 ? `${drawProposal.recommendedPlan.schedule.saturdaySectionalRounds} sectional round(s) Saturday + ${drawProposal.recommendedPlan.schedule.sundaySectionalRounds} sectional round(s) Sunday, followed by ${drawProposal.recommendedPlan.schedule.playoffRoundsOnSunday} playoff round(s) where required.`
-                                                : `${drawProposal.recommendedPlan.totalRounds} playing day(s) required at one round per day.`}
+                                                : drawProposal.recommendedPlan.schedule.competitionType === "week"
+                                                    ? `${drawProposal.recommendedPlan.totalRounds} playing day(s) required at up to 2 rounds per weekday.`
+                                                    : `${drawProposal.recommendedPlan.totalRounds} playing day(s) required at one round per day.`}
 
                                     </div>
 
@@ -6115,7 +6119,11 @@ const getTeamDisplayName = (team) => {
                                 <div className="border rounded p-3 h-100">
                                     <div className="text-muted small">Tournament Type</div>
                                     <div className="fw-bold">
-                                        {scheduleProposal.competitionType === "weekend" ? "Weekend" : "Midweek"}
+                                        {scheduleProposal.competitionType === "weekend"
+                                            ? "Weekend"
+                                            : scheduleProposal.competitionType === "week"
+                                                ? "Weekday Tournament"
+                                                : "Midweek"}
                                     </div>
                                 </div>
                             </div>
@@ -6143,6 +6151,13 @@ const getTeamDisplayName = (team) => {
                             <div className="alert alert-info">
                                 <strong>Weekend rule:</strong> the proposed schedule groups up to 3 rounds per playing session.
                                 For every session, including playoffs, you may select either a Saturday or a Sunday. The suggested day is not compulsory.
+                            </div>
+                        )}
+
+                        {scheduleProposal.competitionType === "week" && (
+                            <div className="alert alert-info">
+                                <strong>Weekday Tournament rule:</strong> the schedule groups a maximum of 2 rounds per playing day, Monday to Friday.
+                                The competition continues into the following week when required. Playoff rounds are included in this limit.
                             </div>
                         )}
 

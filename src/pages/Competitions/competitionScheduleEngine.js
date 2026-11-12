@@ -4,7 +4,7 @@
  * This is a proposal-only engine. It does not write dates or venues.
  * Rules supplied by the competition secretary:
  *   Midweek – One Day: one round per playing day, potentially over many weeks.
- *   Week: weekday competition, maximum 3 rounds per playing day.
+ *   Weekday Tournament: Monday–Friday, maximum 2 rounds per playing day.
  *   Weekend: maximum 3 rounds Saturday + 3 rounds Sunday.
  *   If the complete playoff stage does not fit in the remaining Sunday
  *   capacity, move the whole playoff stage to the next available Saturday.
@@ -64,15 +64,16 @@ export function buildCompetitionScheduleProposal({ competitionType = "weekend", 
     if (competitionType === "week") {
         const days = [];
 
-        // Week competitions may use any weekday and can play up to 3 rounds
-        // on each playing day. The secretary assigns the actual dates later.
-        for (let index = 0; index < orderedRounds.length; index += 3) {
-            const dayRounds = orderedRounds.slice(index, index + 3);
+        // Weekday tournaments run Monday–Friday with no more than two
+        // rounds on each playing day. Sectional and playoff rounds use
+        // the same daily capacity and can continue into another week.
+        for (let index = 0; index < orderedRounds.length; index += 2) {
+            const dayRounds = orderedRounds.slice(index, index + 2);
 
             days.push({
-                key: `week-${days.length + 1}`,
+                key: `weekday-${days.length + 1}`,
                 label: `Playing Day ${days.length + 1}`,
-                typeLabel: "Week — up to 3 rounds",
+                typeLabel: "Weekday Tournament — maximum 2 rounds",
                 rounds: dayRounds.map(round => ({
                     roundNumber: round.round_number,
                     roundName: round.round_name,

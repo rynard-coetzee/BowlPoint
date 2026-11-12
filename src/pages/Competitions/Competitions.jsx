@@ -145,8 +145,7 @@ function Competitions() {
                     : (competition.section_mode || "multiple"),
 
             /*
-             * Schedule type is now stored explicitly so Week and Weekend
-             * can both use up to 3 rounds per playing day.
+             * Schedule type is stored explicitly.
              * Older competitions without schedule_type are migrated from
              * max_games_per_day: 1 = Midweek, otherwise Weekend.
              */
@@ -929,7 +928,7 @@ function Competitions() {
                                         </option>
 
                                         <option value="week">
-                                            Week — up to 3 rounds per playing day (Monday–Friday)
+                                            Weekday Tournament — up to 2 rounds per playing day (Monday–Friday)
                                         </option>
 
                                         <option value="weekend">
