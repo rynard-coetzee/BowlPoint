@@ -620,6 +620,9 @@ function CompetitionLive() {
                                                             <th style={{ width: 42 }}>#</th>
                                                             <th>Team</th>
                                                             <th className="text-center">P</th>
+                                                            <th className="text-center">W</th>
+                                                            <th className="text-center">D</th>
+                                                            <th className="text-center">L</th>
                                                             {competition.scoring?.skins?.enabled && <th className="text-center">Skins</th>}
                                                             <th className="text-center">Pts</th>
                                                             <th className="text-center">Agg</th>
@@ -633,6 +636,9 @@ function CompetitionLive() {
                                                                     <div className="fw-semibold"><TeamDisplay team={row.team} /></div>
                                                                 </td>
                                                                 <td className="text-center">{row.played}</td>
+                                                                <td className="text-center">{row.wins}</td>
+                                                                <td className="text-center">{row.draws}</td>
+                                                                <td className="text-center">{row.losses}</td>
                                                                 {competition.scoring?.skins?.enabled && <td className="text-center">{row.skinsWon}</td>}
                                                                 <td className="text-center fw-bold">{row.points}</td>
                                                                 <td className="text-center">{row.aggregate > 0 ? `+${row.aggregate}` : row.aggregate}</td>
