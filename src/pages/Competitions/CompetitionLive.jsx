@@ -239,7 +239,9 @@ function CompetitionLive() {
             teams: sectionTeams
                 .filter(row => row.section_id === section.id)
                 .map(row => teamById.get(row.competition_team_id))
-                .filter(Boolean)
+                // Match the admin competition page: withdrawn teams must not
+                // appear in public live standings.
+                .filter(team => team && (team.status || "active") !== "withdrawn")
         }));
 
         const hydratedMatches = (matchesResult.data || []).map(match => ({

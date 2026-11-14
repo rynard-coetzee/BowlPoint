@@ -1391,6 +1391,50 @@ function CompetitionWorkspace() {
 
             if (error) throw error;
 
+            // Audit the final competition score only.
+            const previousScoreA = selectedMatch.score_a;
+            const previousScoreB = selectedMatch.score_b;
+            const wasPreviouslyCompleted = selectedMatch.completed === true;
+
+            const teamAName = getMatchTeamName(selectedMatch, "a");
+            const teamBName = getMatchTeamName(selectedMatch, "b");
+
+            const roundName = selectedRound?.round_name || "Unknown round";
+            const matchNumber = selectedMatch.match_number ?? "Unknown";
+
+            const scoreAction = wasPreviouslyCompleted
+                ? "SCORE AMENDED"
+                : "SCORE ENTERED";
+
+            const scoreSummary = wasPreviouslyCompleted
+                ? `Score amended: ${teamAName} ${previousScoreA} - ${previousScoreB} ${teamBName} changed to ${teamAName} ${scoreA} - ${scoreB} ${teamBName}.`
+                : `Final score entered: ${teamAName} ${scoreA} - ${scoreB} ${teamBName}.`;
+
+            try {
+                await logAuditEvent(
+                    "WORKFLOW_ACTION",
+                    `${scoreAction}: ${competition?.name || "Competition"} | ${roundName} | Match ${matchNumber}. ${scoreSummary}`,
+                    {
+                        operation: wasPreviouslyCompleted
+                            ? "score_amended"
+                            : "score_entered",
+                        competition_name: competition?.name || null,
+                        round_name: roundName,
+                        match_number: matchNumber,
+                        team_a: teamAName,
+                        team_b: teamBName,
+                        previous_score_a: wasPreviouslyCompleted ? previousScoreA : null,
+                        previous_score_b: wasPreviouslyCompleted ? previousScoreB : null,
+                        final_score_a: scoreA,
+                        final_score_b: scoreB
+                    },
+                    competitionId
+                );
+            } catch (auditError) {
+                console.error("Score saved, but audit logging failed:", auditError);
+            }
+
+
             // Refresh all matches before deciding the competition status.
             // A competition is completed when every real competition match
             // has a result. Do not rely on a round being named "Final":
