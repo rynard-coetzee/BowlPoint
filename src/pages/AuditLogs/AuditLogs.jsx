@@ -1,9 +1,43 @@
 import { useCallback, useEffect, useState } from "react";
-import { getAuditLogs } from "../../services/auditService";
+import { getAuditLogs, getAuditEntryEnrichment } from "../../services/auditService";
 import { useAuth } from "../../context/AuthContext";
 import "./AuditLogs.css";
 
 const PAGE_SIZE = 100;
+const HIDDEN_DIFF_FIELDS = new Set(["id", "created_at", "updated_at"]);
+
+function humanizeField(field) {
+    return String(field || "").replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+function formatAuditValue(value) {
+    if (value === null || value === undefined || value === "") return "—";
+    if (typeof value === "boolean") return value ? "Yes" : "No";
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
+}
+function getAuditChanges(entry) {
+    const before = entry.old_data || {};
+    const after = entry.new_data || {};
+    return [...new Set([...Object.keys(before), ...Object.keys(after)])]
+        .filter(key => !HIDDEN_DIFF_FIELDS.has(key))
+        .filter(key => JSON.stringify(before[key]) !== JSON.stringify(after[key]))
+        .map(key => ({ key, label: humanizeField(key), before: before[key], after: after[key] }));
+}
+function friendlySummary(entry) {
+    if (entry.summary && !/^\w+ on \w+ \(record /.test(entry.summary)) return entry.summary;
+    const action = entry.action === "INSERT" ? "Created" : entry.action === "DELETE" ? "Deleted" : "Updated";
+    return `${action} ${String(entry.table_name || "BowlPoint record").replace(/_/g, " ")}`;
+}
+function getRelationships(entry) {
+    const context = entry.context || {};
+    const items = context.new_relationships || context.relationships || [];
+    return Array.isArray(items) ? items : [];
+}
+function getCompetitionLabel(entry) {
+    const match = getRelationships(entry).find(item => item.table === "competitions");
+    return match?.label || entry.competition_id || "Not linked / unavailable";
+}
+
 const ACTIONS = [
     "INSERT", "UPDATE", "DELETE", "LOGIN", "LOGOUT", "DRAW_GENERATED", "WORKFLOW_ACTION"
 ];
@@ -40,6 +74,8 @@ export default function AuditLogs() {
     const [from, setFrom] = useState("");
     const [to, setTo] = useState("");
     const [selected, setSelected] = useState(null);
+    const [enrichment, setEnrichment] = useState(null);
+    const [enrichmentLoading, setEnrichmentLoading] = useState(false);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
 
@@ -83,6 +119,29 @@ export default function AuditLogs() {
     };
 
     useEffect(() => { load(0); }, []); // Initial page only; filters are applied with the Search button.
+
+    useEffect(() => {
+        let active = true;
+        async function resolveSelectedEntry() {
+            if (!selected) {
+                setEnrichment(null);
+                return;
+            }
+            setEnrichment(null);
+            setEnrichmentLoading(true);
+            try {
+                const resolved = await getAuditEntryEnrichment(selected);
+                if (active) setEnrichment(resolved);
+            } catch (resolveError) {
+                console.warn("Unable to reconstruct historical audit context:", resolveError);
+                if (active) setEnrichment({ error: "Related records could not be resolved. Technical details remain available below." });
+            } finally {
+                if (active) setEnrichmentLoading(false);
+            }
+        }
+        resolveSelectedEntry();
+        return () => { active = false; };
+    }, [selected]);
 
     if (profile?.role !== "admin") return <div className="container-fluid py-4"><div className="alert alert-danger">Administrator access is required.</div></div>;
 
@@ -169,18 +228,81 @@ export default function AuditLogs() {
                             <button className="btn-close" aria-label="Close" onClick={() => setSelected(null)} />
                         </div>
                         <div className="card-body">
-                            <dl className="row mb-3">
-                                <dt className="col-sm-4">Date / time</dt><dd className="col-sm-8">{formatDate(selected.occurred_at)}</dd>
-                                <dt className="col-sm-4">User</dt><dd className="col-sm-8">{selected.actor_name || "Unknown"} {selected.actor_email ? `(${selected.actor_email})` : ""}</dd>
-                                <dt className="col-sm-4">Action</dt><dd className="col-sm-8">{selected.action}</dd>
-                                <dt className="col-sm-4">Source</dt><dd className="col-sm-8">{selected.event_source}</dd>
-                                <dt className="col-sm-4">Table / record</dt><dd className="col-sm-8">{selected.table_name || "—"} / {selected.record_id || "—"}</dd>
-                                <dt className="col-sm-4">Competition ID</dt><dd className="col-sm-8">{selected.competition_id || "—"}</dd>
-                                <dt className="col-sm-4">Summary</dt><dd className="col-sm-8">{selected.summary}</dd>
-                            </dl>
-                            <h6>Before</h6><pre className="audit-json">{selected.old_data ? JSON.stringify(selected.old_data, null, 2) : "—"}</pre>
-                            <h6 className="mt-3">After</h6><pre className="audit-json">{selected.new_data ? JSON.stringify(selected.new_data, null, 2) : "—"}</pre>
-                            {selected.metadata && Object.keys(selected.metadata).length > 0 && <><h6 className="mt-3">Additional details</h6><pre className="audit-json">{JSON.stringify(selected.metadata, null, 2)}</pre></>}
+                            <div className="audit-context-card mb-3">
+                                <h5 className="mb-3">{friendlySummary(selected)}</h5>
+                                <dl className="row mb-0">
+                                    <dt className="col-sm-4">Date / time</dt><dd className="col-sm-8">{formatDate(selected.occurred_at)}</dd>
+                                    <dt className="col-sm-4">User</dt><dd className="col-sm-8">{selected.actor_name || "Unknown"} {selected.actor_email ? `(${selected.actor_email})` : ""}</dd>
+                                    <dt className="col-sm-4">Action / source</dt><dd className="col-sm-8">{selected.action} · {selected.event_source}</dd>
+                                    <dt className="col-sm-4">Area</dt><dd className="col-sm-8">{selected.table_name || "Application"}</dd>
+                                    <dt className="col-sm-4">Competition ID</dt><dd className="col-sm-8">{getCompetitionLabel(selected)}</dd>
+                                    <dt className="col-sm-4">Record</dt><dd className="col-sm-8">{selected.context?.record_label || selected.record_id || "—"}</dd>
+                                </dl>
+                            </div>
+
+                            {getAuditChanges(selected).length > 0 && <>
+                                <h6>What changed</h6>
+                                <div className="table-responsive mb-3">
+                                    <table className="table table-sm table-bordered align-middle">
+                                        <thead className="table-light"><tr><th>Field</th><th>Before</th><th>After</th></tr></thead>
+                                        <tbody>{getAuditChanges(selected).map(change => <tr key={change.key}>
+                                            <th>{change.label}</th><td className="audit-value">{formatAuditValue(change.before)}</td>
+                                            <td className="audit-value">{formatAuditValue(change.after)}</td>
+                                        </tr>)}</tbody>
+                                    </table>
+                                </div>
+                            </>}
+
+                            {getRelationships(selected).length > 0 ? <>
+                                <h6>Related records captured at the time</h6>
+                                <div className="table-responsive mb-3">
+                                    <table className="table table-sm table-bordered">
+                                        <thead className="table-light"><tr><th>Relationship</th><th>Record type</th><th>Name / label</th></tr></thead>
+                                        <tbody>{getRelationships(selected).map((item, index) => <tr key={`${item.column}-${index}`}>
+                                            <td>{humanizeField(item.column)}</td><td>{humanizeField(item.table)}</td>
+                                            <td>{item.label || item.record_id || "—"}</td>
+                                        </tr>)}</tbody>
+                                    </table>
+                                </div>
+                            </> : <div className="text-muted small mb-3">No related-record context was captured for this event. New database events will include available foreign-key context after the SQL migration is applied.</div>}
+
+                            <section className="audit-retro-context mb-3">
+                                <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+                                    <h6 className="mb-0">Related information (looked up now)</h6>
+                                    <span className="badge text-bg-info">Current linked data</span>
+                                </div>
+                                <p className="small text-muted mb-2">For older entries, BowlPoint looks up related records that still exist. These names reflect the current database, not necessarily the names at the time of the original event.</p>
+                                {enrichmentLoading && <div className="small text-muted">Looking up related competition, match and team details…</div>}
+                                {enrichment?.error && <div className="small text-warning">{enrichment.error}</div>}
+                                {!enrichmentLoading && enrichment && !enrichment.error && <>
+                                    {enrichment.competition && <div><strong>Competition:</strong> {enrichment.competition.name}</div>}
+                                    {enrichment.match && <>
+                                        <div><strong>Match:</strong> {enrichment.match.match_number != null ? `Match ${enrichment.match.match_number}` : enrichment.match.id}</div>
+                                        {enrichment.round && <div><strong>Round:</strong> {enrichment.round.label}</div>}
+                                        {enrichment.section && <div><strong>Section:</strong> {enrichment.section}</div>}
+                                        <div><strong>Current score:</strong> {enrichment.match.score_a ?? "—"} – {enrichment.match.score_b ?? "—"} {enrichment.match.completed ? "(completed)" : "(not completed)"}</div>
+                                    </>}
+                                    {enrichment.teams?.length > 0 && <div className="mt-2"><strong>Teams:</strong>
+                                        <ul className="mb-1">{enrichment.teams.map(team => <li key={team.id}>{team.label}</li>)}</ul>
+                                    </div>}
+                                    {enrichment.teamMove && <div className="mt-2">
+                                        <strong>Team movement:</strong> {enrichment.teamMove.team}<br/>
+                                        <strong>Previous section:</strong> {enrichment.teamMove.from}<br/>
+                                        <strong>Current section:</strong> {enrichment.teamMove.to}
+                                    </div>}
+                                    {enrichment.teamAssignments?.length > 0 && !enrichment.teamMove && <div><strong>Related sections:</strong> {enrichment.teamAssignments.map(item => item.label).join(", ")}</div>}
+                                    {enrichment.player && <div><strong>Player:</strong> {enrichment.player}</div>}
+                                    {!enrichment.historical && <div className="small text-muted">No linked records could be resolved. They may have been deleted, or this event may not contain supported relationship IDs.</div>}
+                                </>}
+                            </section>
+
+                            <details className="mb-3">
+                                <summary className="fw-semibold">Technical details (Before / After JSON)</summary>
+                                <h6 className="mt-3">Before</h6><pre className="audit-json">{selected.old_data ? JSON.stringify(selected.old_data, null, 2) : "—"}</pre>
+                                <h6 className="mt-3">After</h6><pre className="audit-json">{selected.new_data ? JSON.stringify(selected.new_data, null, 2) : "—"}</pre>
+                                {selected.metadata && Object.keys(selected.metadata).length > 0 && <><h6 className="mt-3">Metadata</h6><pre className="audit-json">{JSON.stringify(selected.metadata, null, 2)}</pre></>}
+                                {selected.context && Object.keys(selected.context).length > 0 && <><h6 className="mt-3">Captured context JSON</h6><pre className="audit-json">{JSON.stringify(selected.context, null, 2)}</pre></>}
+                            </details>
                         </div>
                     </div>
                 </div>

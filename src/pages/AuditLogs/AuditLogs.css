@@ -2,3 +2,12 @@
 .audit-modal-backdrop { position: fixed; inset: 0; z-index: 1055; background: rgba(0,0,0,.48); display: flex; justify-content: center; align-items: center; padding: 1rem; }
 .audit-modal { width: min(900px, 100%); max-height: 90vh; overflow: auto; }
 .audit-json { background: #f6f7f9; border: 1px solid #e2e5e9; border-radius: .375rem; padding: .75rem; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; }
+
+.audit-context-card { background: #f8f9fb; border: 1px solid #e1e5ea; border-radius: .5rem; padding: 1rem; }
+.audit-context-card h5 { font-weight: 700; }
+.audit-context-card dd, .audit-value { overflow-wrap: anywhere; }
+.audit-value { max-width: 320px; }
+
+.audit-retro-context { border: 1px solid #d8e2ec; background: #f5f9fc; border-radius: .5rem; padding: 1rem; overflow-wrap: anywhere; }
+.audit-retro-context h6 { font-weight: 700; }
+.audit-retro-context ul { padding-left: 1.25rem; }
