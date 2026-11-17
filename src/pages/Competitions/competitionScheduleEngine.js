@@ -12,6 +12,7 @@
 
 function isSectionalRound(round) {
     const name = String(round.round_name || "").toLowerCase();
+    if (name.includes("bronze") && name.includes("playoff")) return false;
     return name.includes("sectional") || (!name.includes("quarter") && !name.includes("semi") && name !== "final");
 }
 
@@ -80,6 +81,21 @@ export function buildCompetitionScheduleProposal({ competitionType = "weekend", 
                     matchCount: countMatches(round)
                 }))
             });
+        }
+
+        // Bronze Playoff must share the Final's playing day. Move it into
+        // whichever weekday contains the Final, even if that day then has
+        // one additional playoff round.
+        const bronze = orderedRounds.find(round => /bronze[\s-]*playoff/i.test(String(round.round_name || "")));
+        const final = orderedRounds.find(round => /^final$/i.test(String(round.round_name || "").trim()));
+        if (bronze && final) {
+            const bronzeDay = days.find(day => day.rounds.some(item => item.roundNumber === bronze.round_number));
+            const finalDay = days.find(day => day.rounds.some(item => item.roundNumber === final.round_number));
+            if (bronzeDay && finalDay && bronzeDay !== finalDay) {
+                bronzeDay.rounds = bronzeDay.rounds.filter(item => item.roundNumber !== bronze.round_number);
+                finalDay.rounds.push({ roundNumber: bronze.round_number, roundName: bronze.round_name, matchCount: countMatches(bronze) });
+                if (!bronzeDay.rounds.length) days.splice(days.indexOf(bronzeDay), 1);
+            }
         }
 
         return {

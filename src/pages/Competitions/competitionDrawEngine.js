@@ -426,7 +426,7 @@ function allocateTeamsToSections(teams, sectionSizes, variant = 0) {
     return sections;
 }
 
-function createPlayoffMatches(sectionCount) {
+function createPlayoffMatches(sectionCount, competitionFormat = "fours") {
     if (sectionCount === 1) return [];
 
     if (sectionCount === 2) {
@@ -439,7 +439,7 @@ function createPlayoffMatches(sectionCount) {
     }
 
     if (sectionCount === 4) {
-        return [
+        const matches = [
             {
                 stage: "semi_final",
                 matchNumber: 1,
@@ -459,10 +459,19 @@ function createPlayoffMatches(sectionCount) {
                 sourceB: { type: "semi_final_winner", matchNumber: 2 }
             }
         ];
+        if (competitionFormat === "singles") {
+            matches.push({
+                stage: "bronze_playoff",
+                matchNumber: 1,
+                sourceA: { type: "semi_final_loser", matchNumber: 1 },
+                sourceB: { type: "semi_final_loser", matchNumber: 2 }
+            });
+        }
+        return matches;
     }
 
     if (sectionCount === 8) {
-        return [
+        const matches = [
             [1, 3], [2, 4], [5, 7], [6, 8]
         ].map(([a, b], index) => ({
             stage: "quarter_final",
@@ -489,12 +498,21 @@ function createPlayoffMatches(sectionCount) {
                 sourceB: { type: "semi_final_winner", matchNumber: 2 }
             }
         ]);
+        if (competitionFormat === "singles") {
+            matches.push({
+                stage: "bronze_playoff",
+                matchNumber: 1,
+                sourceA: { type: "semi_final_loser", matchNumber: 1 },
+                sourceB: { type: "semi_final_loser", matchNumber: 2 }
+            });
+        }
+        return matches;
     }
 
     throw new Error(`Unsupported playoff structure for ${sectionCount} sections.`);
 }
 
-function createCompetitionPlan({ teams, competitionType, sectionCount, variant, sectionMode = "multiple" }) {
+function createCompetitionPlan({ teams, competitionType, competitionFormat = "fours", sectionCount, variant, sectionMode = "multiple" }) {
     const sectionSizes = getSectionSizes(teams.length, sectionCount);
     const sections = allocateTeamsToSections(teams, sectionSizes, variant);
 
@@ -510,7 +528,8 @@ function createCompetitionPlan({ teams, competitionType, sectionCount, variant, 
 
     const sectionalRounds = getSectionalRoundCount(sectionSizes);
     const playoffStages = playoffStagesForSectionCount(sectionCount);
-    const playoffMatches = createPlayoffMatches(sectionCount);
+    const playoffMatches = createPlayoffMatches(sectionCount, competitionFormat);
+    if (competitionFormat === "singles" && sectionCount >= 4) playoffStages.push("bronze_playoff");
     const sameClubPairs = countSameClubPairs(sections);
     const totalRounds = sectionalRounds + playoffStages.length;
 
@@ -571,7 +590,8 @@ function scorePlan(plan) {
 export function generateCompetitionDrawProposal({
     teams,
     competitionType = "weekend",
-    sectionMode = "multiple"
+    sectionMode = "multiple",
+    competitionFormat = "fours"
 }) {
     assertTeams(teams);
 
@@ -588,6 +608,7 @@ export function generateCompetitionDrawProposal({
         createCompetitionPlan({
             teams: clone(teams),
             competitionType,
+            competitionFormat,
             sectionCount,
             variant,
             sectionMode: normalizedSectionMode

@@ -47,7 +47,7 @@ export default function FacilityAllocation() {
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const [competitionRes, roundsRes, matchesRes, teamsRes, greensRes, bookingsRes, clubsRes, sectionsRes, sectionVenuesRes, playoffVenuesRes] = await Promise.all([
+      const [competitionRes, roundsRes, matchesRes, teamsRes, greensRes, bookingsRes, clubsRes, sectionsRes, sectionVenuesRes, playoffVenuesRes, sectionRoundDatesRes] = await Promise.all([
         supabase.from("competitions").select("id,name").eq("id", competitionId).maybeSingle(),
         supabase.from("competition_rounds").select("id,round_number,round_name,competition_day_id,competition_days(id,playing_date,name,venue_club_id,clubs(id,name,short_name))").eq("competition_id", competitionId).order("round_number"),
         supabase.from("competition_matches").select("id,round_id,section_id,match_number,team_a_id,team_b_id,completed").eq("competition_id", competitionId).order("match_number"),
@@ -57,9 +57,10 @@ export default function FacilityAllocation() {
         supabase.from("clubs").select("id,name,short_name").order("name"),
         supabase.from("competition_sections").select("id,competition_id,section_number,section_name").eq("competition_id", competitionId).order("section_number"),
         supabase.from("competition_section_venues").select("section_id,club_id,green_id").eq("competition_id", competitionId),
-        supabase.from("competition_playoff_venues").select("round_id,club_id").eq("competition_id", competitionId)
+        supabase.from("competition_playoff_venues").select("round_id,club_id").eq("competition_id", competitionId),
+        supabase.from("competition_section_round_dates").select("section_id,round_id,playing_date").eq("competition_id", competitionId)
       ]);
-      for (const result of [roundsRes, matchesRes, teamsRes, greensRes, bookingsRes, clubsRes, sectionsRes, sectionVenuesRes, playoffVenuesRes]) if (result.error) throw result.error;
+      for (const result of [roundsRes, matchesRes, teamsRes, greensRes, bookingsRes, clubsRes, sectionsRes, sectionVenuesRes, playoffVenuesRes, sectionRoundDatesRes]) if (result.error) throw result.error;
 
       const rawBookings = bookingsRes.data || [];
       const bookingMatchIds = [...new Set(rawBookings.map(booking => booking.match_id).filter(Boolean))];
@@ -106,8 +107,17 @@ export default function FacilityAllocation() {
       const teamMap = new Map(loadedTeams.map(t => [t.id, t]));
       const roundRows = (roundsRes.data || []).map(r => ({ ...r, day: r.competition_days }));
       const roundMap = new Map(roundRows.map(r => [r.id, r]));
+      const sectionRoundDateMap = new Map((sectionRoundDatesRes.data || []).map(row => [`${row.section_id}|${row.round_id}`, row.playing_date]));
       setRounds(roundRows);
-      setMatches((matchesRes.data || []).map(m => ({ ...m, round: roundMap.get(m.round_id), teamA: teamMap.get(m.team_a_id), teamB: teamMap.get(m.team_b_id) })));
+      setMatches((matchesRes.data || []).map(m => {
+        const baseRound = roundMap.get(m.round_id);
+        const overrideDate = m.section_id ? sectionRoundDateMap.get(`${m.section_id}|${m.round_id}`) : null;
+        const effectiveRound = overrideDate && baseRound ? {
+          ...baseRound,
+          day: { ...(baseRound.day || {}), playing_date: overrideDate, name: "Early start" }
+        } : baseRound;
+        return { ...m, round: effectiveRound, teamA: teamMap.get(m.team_a_id), teamB: teamMap.get(m.team_b_id) };
+      }));
       const activeGreens = (greensRes.data || []).map(g => ({ ...g, rinks: (g.green_rinks || []).filter(r => r.active) })).filter(g => g.rinks.length);
       setGreens(activeGreens);
       const clubRows = clubsRes.data || [];
@@ -685,8 +695,11 @@ export default function FacilityAllocation() {
       const fallbackSession = SESSIONS[idx];
       const old = bookings.find(b => b.match_id === m.id && b.competition_id === competitionId && b.status !== "cancelled");
       const oldGreen = old ? greens.find(g => g.id === old.green_id) : null;
-      const date = old?.playing_date || m.round.day.playing_date;
-      const session = old ? {
+      const scheduledDate = m.round.day.playing_date;
+      const hasSectionDateOverride = Boolean(m.section_id && (m.round.day.name === "Early start"));
+      const date = hasSectionDateOverride ? scheduledDate : (old?.playing_date || scheduledDate);
+      const oldBookingOnCurrentDate = old && old.playing_date === date;
+      const session = oldBookingOnCurrentDate ? {
         name: old.session_name || fallbackSession.name,
         start: old.starts_at ? new Date(old.starts_at).toLocaleTimeString("en-GB", { timeZone: "Africa/Johannesburg", hour12: false }) : fallbackSession.start,
         end: old.ends_at ? new Date(old.ends_at).toLocaleTimeString("en-GB", { timeZone: "Africa/Johannesburg", hour12: false }) : fallbackSession.end,
@@ -701,8 +714,8 @@ export default function FacilityAllocation() {
         playing_date: date, venue_club_id: savedPlayoffClubId || oldGreen?.club_id || m.round.day?.venue_club_id || "",
         venue_name: clubs.find(club => club.id === savedPlayoffClubId)?.name || oldGreen?.clubs?.name || m.round.day?.clubs?.name || "Not yet allocated",
         session_name: session.name,
-        starts_at: old?.starts_at || localIso(date, session.start),
-        ends_at: old?.ends_at || localIso(date, session.end),
+        starts_at: oldBookingOnCurrentDate ? old.starts_at : localIso(date, session.start),
+        ends_at: oldBookingOnCurrentDate ? old.ends_at : localIso(date, session.end),
         green_id: old?.green_id || "", rink_id: old?.rink_id || "", direction: session.direction,
         booking_id: old?.id || null, status: old?.status || "confirmed", notes: old?.notes || "",
       };

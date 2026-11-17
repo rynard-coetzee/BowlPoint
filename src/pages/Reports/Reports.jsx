@@ -354,8 +354,9 @@ function Reports() {
                 );
 
                 if (finalMatches.length === 1) {
-                    // Knockout competitions: winner/runner-up from the final,
-                    // shared bronze for both losing semi-finalists.
+                    // Knockout competitions: winner/runner-up from the Final.
+                    // Singles use a dedicated Bronze Playoff; team formats retain
+                    // the established shared-Bronze rule for losing semi-finalists.
                     const finalMatch = finalMatches[0];
                     const goldTeamId = winningTeamId(finalMatch);
                     const silverTeamId = losingTeamId(finalMatch);
@@ -363,9 +364,16 @@ function Reports() {
                     addMedal(competition, goldTeamId, "Gold", 1);
                     addMedal(competition, silverTeamId, "Silver", 2);
 
-                    [...new Set(semiMatches.map(losingTeamId))]
-                        .filter(teamId => teamId !== goldTeamId && teamId !== silverTeamId)
-                        .forEach(teamId => addMedal(competition, teamId, "Bronze", 3));
+                    if (String(competition.format || "").toLowerCase() === "singles") {
+                        const bronzeMatch = competitionMatches.find(match => /bronze[\s-]*playoff/i.test(getRoundName(match)));
+                        if (bronzeMatch && hasResult(bronzeMatch)) {
+                            addMedal(competition, winningTeamId(bronzeMatch), "Bronze", 3);
+                        }
+                    } else {
+                        [...new Set(semiMatches.map(losingTeamId))]
+                            .filter(teamId => teamId !== goldTeamId && teamId !== silverTeamId)
+                            .forEach(teamId => addMedal(competition, teamId, "Bronze", 3));
+                    }
 
                     return;
                 }
@@ -1057,7 +1065,7 @@ function PlayerHistoryReport({
                         <div className="card-header bg-white">
                             <strong><i className="bi bi-award-fill me-2"></i>Top 3 Medals Achieved</strong>
                             <div className="small text-muted mt-1">
-                                Gold, Silver and shared Bronze awards from completed competitions.
+                                Gold, Silver and Bronze awards from completed competitions.
                             </div>
                         </div>
                         <div className="card-body p-0">

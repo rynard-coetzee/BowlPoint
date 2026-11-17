@@ -318,6 +318,7 @@ export function exportCompetitionFixturesPdf({
     competition,
     confirmedDraw,
     playingDays = [],
+    sectionRoundDateOverrides = [],
     includeRinkAllocations = true
 }) {
     const byeLabel = String(competition?.format || "").toLowerCase() === "singles" ? "MARK" : "BYE";
@@ -376,7 +377,11 @@ export function exportCompetitionFixturesPdf({
         return label || "—";
     };
     const getSchedule = (round, section = null, includeRinkAllocations = true) => {
-        const day = playingDays.find(item => item.id === round.competition_day_id) || round.competition_days || {};
+        const override = section
+            ? sectionRoundDateOverrides.find(item => item.section_id === section.id && item.round_id === round.id)
+            : null;
+        const baseDay = playingDays.find(item => item.id === round.competition_day_id) || round.competition_days || {};
+        const day = override ? { ...baseDay, playing_date: override.playing_date, name: "Early start" } : baseDay;
         const date = day.playing_date
             ? new Date(`${day.playing_date}T00:00:00`).toLocaleDateString("en-ZA", { day: "2-digit", month: "2-digit", year: "numeric" })
             : "";

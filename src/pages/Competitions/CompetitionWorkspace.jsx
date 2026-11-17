@@ -74,6 +74,9 @@ function CompetitionWorkspace() {
     const [sectionManagerMessage, setSectionManagerMessage] = useState("");
     const [scheduleProposal, setScheduleProposal] = useState(null);
     const [scheduleAssignments, setScheduleAssignments] = useState([]);
+    const [earlyStartEnabled, setEarlyStartEnabled] = useState(false);
+    const [earlyStartSectionId, setEarlyStartSectionId] = useState("");
+    const [sectionRoundDateOverrides, setSectionRoundDateOverrides] = useState([]);
     const [scorecardSummary, setScorecardSummary] = useState({ clubs: [], total: 0, unassigned: 0 });
 
     // Results / live scoring state.
@@ -467,6 +470,21 @@ function CompetitionWorkspace() {
             .select("id, competition_id, round_id, section_id, match_number, team_a_id, team_b_id, score_a, score_b, skins_a, skins_b, completed, next_match_id, next_match_slot")
             .eq("competition_id", competitionId);
 
+        const sectionRoundDatesResult = await supabase
+            .from("competition_section_round_dates")
+            .select("section_id, round_id, playing_date")
+            .eq("competition_id", competitionId);
+
+        if (sectionRoundDatesResult.error) {
+            console.error("Error loading section-specific round dates:", sectionRoundDatesResult.error);
+            alert(`Unable to load section-specific round dates.\n\n${sectionRoundDatesResult.error.message}`);
+            setLoading(false);
+            return;
+        }
+        setSectionRoundDateOverrides(sectionRoundDatesResult.data || []);
+        setEarlyStartEnabled((sectionRoundDatesResult.data || []).length > 0);
+        setEarlyStartSectionId((sectionRoundDatesResult.data || [])[0]?.section_id || "");
+
         const sectionVenuesResult = await supabase
             .from("competition_section_venues")
             .select("section_id, club_id")
@@ -798,6 +816,17 @@ function CompetitionWorkspace() {
         }
     }, [confirmedDraw, drawType, competition?.schedule_type]);
 
+    const weekdaySectionSizes = (confirmedDraw?.sections || [])
+        .map(section => ({ ...section, teamCount: (section.teams || section.allTeams || []).length }))
+        .filter(section => section.teamCount > 0);
+    const hasUnequalWeekdaySections = new Set(weekdaySectionSizes.map(section => section.teamCount)).size > 1;
+    const largestWeekdaySections = weekdaySectionSizes.filter(section =>
+        section.teamCount === Math.max(0, ...weekdaySectionSizes.map(item => item.teamCount))
+    );
+    const earlyStartDate = scheduleAssignments[0]?.playing_date
+        ? (() => { const date = new Date(`${scheduleAssignments[0].playing_date}T12:00:00`); date.setDate(date.getDate() - 1); return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`; })()
+        : "";
+
     useEffect(() => {
         if (!scheduleProposal?.days?.length) {
             setScheduleAssignments([]);
@@ -888,6 +917,11 @@ function CompetitionWorkspace() {
         }
 
         const competitionType = scheduleProposal.competitionType;
+
+        if (competitionType === "week" && earlyStartEnabled && !earlyStartSectionId) {
+            alert("Please select the section that must start early.");
+            return;
+        }
 
         for (const assignment of scheduleAssignments) {
             if (!assignment.playing_date) {
@@ -1000,6 +1034,31 @@ function CompetitionWorkspace() {
                     .eq("id", round.id);
 
                 if (error) throw error;
+            }
+
+            // A weekday early start is stored at section + round level. Only
+            // Round 1 of the selected larger section is moved to the preceding Monday.
+            if (competitionType === "week" && earlyStartEnabled && earlyStartSectionId) {
+                const firstRound = confirmedDraw.rounds.find(round => Number(round.round_number) === 1);
+                if (!firstRound || !earlyStartDate) throw new Error("The early-start section needs a valid first playing date and Round 1.");
+                const monday = new Date(`${earlyStartDate}T12:00:00`).getDay() === 1;
+                if (!monday) throw new Error("The early-start date must be a Monday. Set the first normal playing date to Tuesday or later.");
+                const { error: overrideError } = await supabase
+                    .from("competition_section_round_dates")
+                    .upsert({
+                        competition_id: competitionId,
+                        section_id: earlyStartSectionId,
+                        round_id: firstRound.id,
+                        playing_date: earlyStartDate,
+                        updated_at: new Date().toISOString()
+                    }, { onConflict: "competition_id,section_id,round_id" });
+                if (overrideError) throw overrideError;
+            } else {
+                const { error: clearOverrideError } = await supabase
+                    .from("competition_section_round_dates")
+                    .delete()
+                    .eq("competition_id", competitionId);
+                if (clearOverrideError) throw clearOverrideError;
             }
 
             alert("Schedule saved successfully. The confirmed rounds are now assigned to the selected dates and venues.");
@@ -1247,6 +1306,141 @@ function CompetitionWorkspace() {
             }
         })();
     }, [confirmedDraw]);
+
+    // Singles competitions with four/eight sections have a third-place match.
+    // For older draws, add the missing fixture without changing existing scores
+    // or fixture IDs. Its playing day is inherited from the Final.
+    const bronzeBackfillInFlight = useRef(false);
+    useEffect(() => {
+        if (competition?.format !== "singles" || !confirmedDraw?.rounds?.length || !confirmedDraw?.matches?.length || bronzeBackfillInFlight.current) return;
+        const semiMatches = confirmedDraw.matches.filter(match => /semi[\s-]*final/i.test(String(match.round?.round_name || "")));
+        const finalRound = confirmedDraw.rounds.find(round => /^final$/i.test(String(round.round_name || "").trim()));
+        if (semiMatches.length !== 2 || !finalRound) return;
+
+        const bronzeRound = confirmedDraw.rounds.find(round => /bronze[\s-]*playoff/i.test(String(round.round_name || "")));
+        const bronzeMatch = bronzeRound && confirmedDraw.matches.find(match => match.round_id === bronzeRound.id);
+
+        const getLoserId = match => {
+            if (!match?.completed || match.score_a == null || match.score_b == null || Number(match.score_a) === Number(match.score_b)) return null;
+            return Number(match.score_a) < Number(match.score_b) ? match.team_a_id : match.team_b_id;
+        };
+
+        (async () => {
+            bronzeBackfillInFlight.current = true;
+            try {
+                let targetRound = bronzeRound;
+                let targetMatch = bronzeMatch;
+                let dataChanged = false;
+                if (!targetRound) {
+                    const maxRoundNumber = Math.max(...confirmedDraw.rounds.map(round => Number(round.round_number) || 0));
+                    const { data: insertedRound, error: roundError } = await supabase
+                        .from("competition_rounds")
+                        .insert({
+                            competition_id: competitionId,
+                            competition_day_id: finalRound.competition_day_id || null,
+                            round_number: maxRoundNumber + 1,
+                            round_name: "Bronze Playoff",
+                            status: "pending"
+                        })
+                        .select("id, competition_id, competition_day_id, round_number, round_name, status")
+                        .single();
+                    if (roundError) throw roundError;
+                    targetRound = insertedRound;
+                    dataChanged = true;
+                    const { data: insertedMatch, error: matchError } = await supabase
+                        .from("competition_matches")
+                        .insert({
+                            competition_id: competitionId,
+                            round_id: targetRound.id,
+                            section_id: null,
+                            match_number: 1,
+                            team_a_id: null,
+                            team_b_id: null,
+                            score_a: null,
+                            score_b: null,
+                            points_a: null,
+                            points_b: null,
+                            shots_for_a: null,
+                            shots_for_b: null,
+                            completed: false,
+                            completed_at: null,
+                            next_match_id: null,
+                            next_match_slot: null
+                        })
+                        .select("id, competition_id, round_id, match_number, team_a_id, team_b_id, score_a, score_b, completed")
+                        .single();
+                    if (matchError) throw matchError;
+                    targetMatch = insertedMatch;
+                    dataChanged = true;
+                    await logAuditEvent(
+                        "WORKFLOW_ACTION",
+                        `Added missing Bronze Playoff fixture to ${competition?.name || "Singles competition"}. Existing results were preserved.`,
+                        { operation: "bronze_playoff_backfilled", competition_name: competition?.name || null },
+                        competitionId
+                    );
+                }
+
+                if (targetRound && !targetMatch) {
+                    const { data: insertedMatch, error: matchError } = await supabase
+                        .from("competition_matches")
+                        .insert({
+                            competition_id: competitionId,
+                            round_id: targetRound.id,
+                            section_id: null,
+                            match_number: 1,
+                            team_a_id: null,
+                            team_b_id: null,
+                            score_a: null,
+                            score_b: null,
+                            points_a: null,
+                            points_b: null,
+                            shots_for_a: null,
+                            shots_for_b: null,
+                            completed: false,
+                            completed_at: null,
+                            next_match_id: null,
+                            next_match_slot: null
+                        })
+                        .select("id, competition_id, round_id, match_number, team_a_id, team_b_id, score_a, score_b, completed")
+                        .single();
+                    if (matchError) throw matchError;
+                    targetMatch = insertedMatch;
+                    dataChanged = true;
+                }
+
+                // Always align the Bronze Playoff date with the Final, including
+                // older competitions whose Final date was assigned previously.
+                if (targetRound.competition_day_id !== finalRound.competition_day_id) {
+                    const { error } = await supabase.from("competition_rounds")
+                        .update({ competition_day_id: finalRound.competition_day_id || null })
+                        .eq("id", targetRound.id);
+                    if (error) throw error;
+                    dataChanged = true;
+                }
+
+                const loserA = getLoserId(semiMatches.find(match => match.match_number === 1));
+                const loserB = getLoserId(semiMatches.find(match => match.match_number === 2));
+                if (loserA && loserB && targetMatch && !targetMatch.completed &&
+                    (targetMatch.team_a_id !== loserA || targetMatch.team_b_id !== loserB)) {
+                    const { error } = await supabase.from("competition_matches")
+                        .update({ team_a_id: loserA, team_b_id: loserB })
+                        .eq("id", targetMatch.id);
+                    if (error) throw error;
+                    dataChanged = true;
+                }
+                if (dataChanged && competition?.status === "completed") {
+                    const { error: statusError } = await supabase.from("competitions")
+                        .update({ status: "in_progress" }).eq("id", competitionId);
+                    if (statusError) throw statusError;
+                }
+                if (dataChanged) await loadData();
+            } catch (error) {
+                console.error("Unable to prepare Singles Bronze Playoff:", error);
+            } finally {
+                bronzeBackfillInFlight.current = false;
+            }
+        })();
+    }, [competition?.format, competition?.status, competition?.name, confirmedDraw, competitionId]);
 
     const advanceWinner = async (matchId, winnerTeamId) => {
         const source = (confirmedDraw?.matches || []).find(match => match.id === matchId);
@@ -2874,7 +3068,8 @@ const handleAddReplacement = async () => {
         try {
             const proposal = generateCompetitionDrawProposal({
                 teams: activeTeams,
-                competitionType: drawType
+                competitionType: drawType,
+                competitionFormat: competition?.format || "fours"
             });
 
             setDrawProposal(proposal);
@@ -3927,8 +4122,7 @@ const getTeamDisplayName = (team) => {
 
     /*
      * Final competition podium. Gold/Silver come from the completed final.
-     * Bronze is shared by the two losing semi-finalists; no third-place match
-     * is used to determine bronze.
+     * Singles Bronze comes from the Bronze Playoff; team formats retain shared Bronze.
      */
     const competitionPodium = (() => {
         if (competition?.status !== "completed" || !confirmedDraw?.matches?.length) return null;
@@ -3960,14 +4154,21 @@ const getTeamDisplayName = (team) => {
         const finalRunnerUpId = finalWinnerId === finalMatch.team_a_id
             ? finalMatch.team_b_id : finalMatch.team_a_id;
 
-        const bronzeTeamIds = semiFinalMatches
-            .filter(completedResult)
-            .map(match => Number(match.score_a) < Number(match.score_b)
-                ? match.team_a_id : match.team_b_id)
-            .filter(teamId => teamId !== finalWinnerId && teamId !== finalRunnerUpId);
-
-        const uniqueBronzeIds = [...new Set(bronzeTeamIds)];
-        if (uniqueBronzeIds.length !== 2) return null;
+        const bronzePlayoff = matches.find(match => /bronze[\s-]*playoff/i.test(roundName(match)));
+        let uniqueBronzeIds = [];
+        if (competition?.format === "singles") {
+            if (!completedResult(bronzePlayoff)) return null;
+            uniqueBronzeIds = [Number(bronzePlayoff.score_a) > Number(bronzePlayoff.score_b)
+                ? bronzePlayoff.team_a_id : bronzePlayoff.team_b_id];
+        } else {
+            const bronzeTeamIds = semiFinalMatches
+                .filter(completedResult)
+                .map(match => Number(match.score_a) < Number(match.score_b)
+                    ? match.team_a_id : match.team_b_id)
+                .filter(teamId => teamId !== finalWinnerId && teamId !== finalRunnerUpId);
+            uniqueBronzeIds = [...new Set(bronzeTeamIds)];
+            if (uniqueBronzeIds.length !== 2) return null;
+        }
 
         const teamById = new Map(teams.map(team => [team.id, team]));
         const toPodiumTeam = teamId => {
@@ -3986,7 +4187,7 @@ const getTeamDisplayName = (team) => {
         const gold = toPodiumTeam(finalWinnerId);
         const silver = toPodiumTeam(finalRunnerUpId);
         const bronze = uniqueBronzeIds.map(toPodiumTeam).filter(Boolean);
-        if (!gold || !silver || bronze.length !== 2) return null;
+        if (!gold || !silver || bronze.length !== (competition?.format === "singles" ? 1 : 2)) return null;
 
         return { gold, silver, bronze };
     })();
@@ -4139,6 +4340,7 @@ const getTeamDisplayName = (team) => {
                 competition,
                 confirmedDraw: exportDraw,
                 playingDays,
+                sectionRoundDateOverrides,
                 includeRinkAllocations
             });
         } catch (error) {
@@ -4242,7 +4444,7 @@ const getTeamDisplayName = (team) => {
                 <div className="card shadow-sm border-0 mb-4">
                     <div className="card-header bg-white">
                         <div className="fw-semibold">Competition Results</div>
-                        <div className="small text-muted">Final standings — Gold, Silver and shared Bronze</div>
+                        <div className="small text-muted">Final standings — Gold, Silver and {competition?.format === "singles" ? "Bronze Playoff winner" : "shared Bronze"}</div>
                     </div>
                     <div className="card-body">
                         <div className="row g-3 align-items-stretch">
@@ -6219,6 +6421,77 @@ const getTeamDisplayName = (team) => {
                             </div>
                         )}
 
+                        {scheduleProposal.competitionType === "week" && hasUnequalWeekdaySections && (
+                            <div className="card border-info mb-3">
+                                <div className="card-body">
+                                    <div className="form-check form-switch mb-2">
+                                        <input className="form-check-input" type="checkbox" id="weekdayEarlyStartEnabled"
+                                            checked={earlyStartEnabled} onChange={event => setEarlyStartEnabled(event.target.checked)} />
+                                        <label className="form-check-label fw-semibold" htmlFor="weekdayEarlyStartEnabled">
+                                            Enable early start for the larger section
+                                        </label>
+                                    </div>
+                                    <div className="small text-muted mb-3">
+                                        The selected section plays its complete Round 1 (two matches and one BYE for a five-team section) on the Monday before the normal schedule. All other sections keep the normal weekday dates.
+                                    </div>
+                                    {earlyStartEnabled && (
+                                        <div className="row g-2 align-items-end">
+                                            <div className="col-md-6">
+                                                <label className="form-label">Section to start early</label>
+                                                <select className="form-select" value={earlyStartSectionId}
+                                                    onChange={event => setEarlyStartSectionId(event.target.value)}>
+                                                    <option value="">Select larger section</option>
+                                                    {largestWeekdaySections.map(section => (
+                                                        <option key={section.id} value={section.id}>
+                                                            {section.section_name || `Section ${section.section_number}`} ({section.teamCount} teams)
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div className="col-md-6">
+                                                <label className="form-label">Early-start date</label>
+                                                <input type="date" className="form-control" value={earlyStartDate} readOnly />
+                                                <div className="form-text">Automatically one day before the first normal playing date.</div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {scheduleProposal.competitionType === "week" && earlyStartEnabled && earlyStartSectionId && earlyStartDate && (
+                            <div className="card border-info mb-3">
+                                <div className="card-header bg-white">
+                                    <strong>Early Start Day</strong>
+                                    <div className="small text-muted">Weekday Tournament — selected section starts one round early</div>
+                                </div>
+                                <div className="card-body">
+                                    {(() => {
+                                        const earlySection = confirmedDraw.sections?.find(section => String(section.id) === String(earlyStartSectionId));
+                                        const firstRound = confirmedDraw.rounds?.find(round => Number(round.round_number) === 1);
+                                        const earlyMatches = (earlySection?.matches || []).filter(match =>
+                                            String(match.round_id || match.round?.id || "") === String(firstRound?.id || "") ||
+                                            Number(match.round?.round_number || match.round_number) === 1
+                                        );
+                                        const actualGames = earlyMatches.filter(match => match.team_a_id && match.team_b_id).length;
+                                        const sectionLabel = earlySection?.section_name || `Section ${earlySection?.section_number || ""}`;
+                                        return (
+                                            <div className="d-flex flex-wrap justify-content-between align-items-center gap-3">
+                                                <div>
+                                                    <div className="fw-semibold">{sectionLabel}</div>
+                                                    <div className="small text-muted">Sectional Round 1 · {actualGames || 2} matches · 1 BYE</div>
+                                                </div>
+                                                <div className="text-end">
+                                                    <div className="fw-semibold">{earlyStartDate}</div>
+                                                    <span className="badge bg-info text-dark">Monday · Early start</span>
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
+                                </div>
+                            </div>
+                        )}
+
                         <div className="row g-3">
                             {scheduleProposal.days.map(day => (
                                 <div className="col-lg-4 col-md-6" key={day.key}>
@@ -6265,6 +6538,36 @@ const getTeamDisplayName = (team) => {
                                 {scheduleAssignments.length && scheduleAssignments.every(item => item.playing_date) && confirmedDraw.rounds.every(round => round.competition_day_id) ? "Dates assigned" : "Dates required"}
                             </span>
                         </div>
+
+                        {scheduleProposal.competitionType === "week" && earlyStartEnabled && earlyStartSectionId && earlyStartDate && (
+                            <div className="col-12 mb-3">
+                                <div className="border border-info rounded p-3 bg-light">
+                                    <div className="row g-3 align-items-center">
+                                        <div className="col-lg-3">
+                                            <div className="fw-semibold">Early Start Day</div>
+                                            <div className="small text-muted">Weekday Tournament — early section start</div>
+                                            <div className="small mt-1">Sectional Round 1</div>
+                                        </div>
+                                        <div className="col-lg-3">
+                                            <label className="form-label">Date</label>
+                                            <input type="date" className="form-control" value={earlyStartDate} readOnly />
+                                            <div className="small text-muted mt-1">Monday before Playing Day 1</div>
+                                        </div>
+                                        <div className="col-lg-4">
+                                            <label className="form-label">Section playing</label>
+                                            <div className="form-control bg-white">
+                                                {weekdaySectionSizes.find(section => String(section.id) === String(earlyStartSectionId))?.section_name ||
+                                                    `Section ${weekdaySectionSizes.find(section => String(section.id) === String(earlyStartSectionId))?.section_number || ""}`}
+                                            </div>
+                                            <div className="small text-muted mt-1">Only this section plays on the early-start date.</div>
+                                        </div>
+                                        <div className="col-lg-2">
+                                            <span className="badge bg-info text-dark">Early start</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         <div className="row g-3">
                             {scheduleAssignments.map((assignment, index) => (
@@ -6606,6 +6909,11 @@ const getTeamDisplayName = (team) => {
                                                                             const roundMatches = matchesByRound[roundNumber];
                                                                             const round = confirmedDraw.rounds.find(r => r.round_number === Number(roundNumber));
                                                                             const day = round?.competition_day_id ? playingDays.find(d => d.id === round.competition_day_id) : null;
+                                                                            const sectionRoundOverride = sectionRoundDateOverrides.find(item =>
+                                                                                String(item.section_id) === String(section.id) &&
+                                                                                String(item.round_id) === String(round?.id || "")
+                                                                            );
+                                                                            const displayedPlayingDate = sectionRoundOverride?.playing_date || day?.playing_date;
                                                                             const venue = day?.clubs?.name || clubs.find(club => club.id === day?.venue_club_id)?.name;
 
                                                                             return (
@@ -6616,7 +6924,7 @@ const getTeamDisplayName = (team) => {
                                                                                             {round?.round_name || `Sectional Round ${roundNumber}`}
                                                                                         </div>
                                                                                         <div className="small text-muted">
-                                                                                            {day?.playing_date || "Date not assigned"}{venue ? ` • ${venue}` : ""}
+                                                                                            {displayedPlayingDate || "Date not assigned"}{venue ? ` • ${venue}` : ""}
                                                                                         </div>
                                                                                     </div>
 
